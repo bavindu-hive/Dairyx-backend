@@ -12,14 +12,14 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_message) = match self {
+        let (status, error_message): (StatusCode, String) = match self {
             AppError::DatabaseError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Database error occurred",
+                "Database error occurred".to_string(),
             ),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized access"),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.as_str()),
-            AppError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized access".to_string()),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg),
         };
 
         let body = Json(json!({

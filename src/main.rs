@@ -5,16 +5,19 @@ mod models;
 mod database;
 mod middleware;
 mod state;
+mod dtos; // expose DTO modules
 mod error;
 
 use axum::{routing::get, Router};
+use tracing_subscriber::fmt::init as tracing_init;
+use tokio::net::TcpListener;
 use dotenvy::dotenv;
 use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() {
     // Initialize logging
-    tracing_subscriber::init();
+    tracing_init();
     
     // Load environment variables
     dotenv().ok();
@@ -28,20 +31,20 @@ async fn main() {
     // Create application state
     let app_state = state::AppState::new(db_pool);
     
-    // Build application
-    let app = Router::new()
+    // Build application under /DairyX base path
+    let api = routes::create_router()
         .route("/", get(|| async { "DairyX API" }))
-        .route("/health", get(health_check))
+        .route("/health", get(health_check));
+
+    let app = Router::new()
+        .nest("/DairyX", api)
         .with_state(app_state);
     
-    // Start server
+    // Start server (axum 0.8 style)
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     tracing::info!("Server running on {}", addr);
-    
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 async fn health_check() -> &'static str {
