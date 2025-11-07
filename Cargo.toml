@@ -1,0 +1,42 @@
+[package]
+name = "dairyx-backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web framework (like Spring Web)
+axum = "0.8.5"
+
+# Async runtime (like @Async)
+tokio = { version = "1.0", features = ["full"] }
+
+# Database (like Spring Data JPA)
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros"] }
+
+# JSON serialization (like Jackson)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Environment variables (like @Value)
+dotenvy = "0.15"
+
+# HTTP types (like HttpStatus)
+http = "1.2"
+hyper = "1.7"
+
+# Authentication (like Spring Security)
+jsonwebtoken = "10.0"
+bcrypt = "0.17"
+
+# CORS middleware (like @CrossOrigin)
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Logging (like SLF4J)
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+
+[dev-dependencies]
+# Test dependencies
+tokio = { version = "1.0", features = ["full"] }
+
