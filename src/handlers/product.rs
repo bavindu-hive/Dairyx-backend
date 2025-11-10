@@ -13,7 +13,7 @@ use tracing::{error, instrument};
 fn map_unique_violation(err: SqlxError, message: &str) -> AppError {
     match err {
         SqlxError::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
-            AppError::ValidationError(message.to_string())
+            AppError::conflict(message)
         }
         other => other.into(),
     }
@@ -58,7 +58,7 @@ pub async fn get_product(
         .bind(id)
         .fetch_optional(&state.db_pool)
         .await?
-        .ok_or_else(|| AppError::NotFound("Product not found".to_string()))?;
+    .ok_or_else(|| AppError::not_found("Product not found"))?;
 
     Ok(Json(ProductResponse::from(product)))
 }
@@ -110,7 +110,7 @@ pub async fn update_product(
     .fetch_optional(&state.db_pool)
     .await
     .map_err(|e| map_unique_violation(e, "Product name already exists"))?
-    .ok_or_else(|| AppError::NotFound("Product not found".to_string()))?;
+    .ok_or_else(|| AppError::not_found("Product not found"))?;
 
     Ok(Json(ProductResponse::from(product)))
 }
@@ -127,7 +127,7 @@ pub async fn delete_product(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Product not found".to_string()));
+    return Err(AppError::not_found("Product not found"));
     }
 
     Ok(Json(()))

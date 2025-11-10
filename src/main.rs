@@ -7,6 +7,7 @@ mod middleware;
 mod state;
 mod dtos; // expose DTO modules
 mod error;
+mod auth; // expose auth module
 
 use axum::{routing::get, Router};
 use tracing_subscriber::fmt::init as tracing_init;

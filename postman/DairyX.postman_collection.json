@@ -1,0 +1,83 @@
+{
+  "info": {
+    "name": "DairyX Local API",
+    "_postman_id": "dairyx-local-collection",
+    "description": "Collection for local DairyX backend with auth. Login request saves JWT to environment variable `jwt`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "{{baseUrl}}" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{jwt}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Users / Register",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}/users/register", "host": ["{{baseUrl}}"], "path": ["users","register"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"alice\",\n  \"password\": \"password123\",\n  \"role\": \"manager\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Users / Login (saves JWT)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Login status 200', function () { pm.response.to.have.status(200); });",
+              "let data = {};",
+              "try { data = pm.response.json(); } catch (e) { pm.test('Response is JSON', function(){ throw new Error('Not JSON'); }); }",
+              "pm.expect(data).to.have.property('access_token');",
+              "pm.environment.set('jwt', data.access_token);",
+              "pm.environment.set('token_type', data.token_type || 'Bearer');",
+              "if (data.expires_in_seconds) pm.environment.set('expires_in_seconds', data.expires_in_seconds);",
+              "console.log('JWT saved to environment as \\"jwt\\"');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}/users/login", "host": ["{{baseUrl}}"], "path": ["users","login"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"alice\",\n  \"password\": \"password123\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Users / Me (protected)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users","me"] }
+      }
+    },
+    {
+      "name": "Products / List",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/products", "host": ["{{baseUrl}}"], "path": ["products"] }
+      }
+    }
+  ]
+}
