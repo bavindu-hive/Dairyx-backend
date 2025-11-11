@@ -3,6 +3,7 @@ pub mod users;
 pub mod deliveries;
 pub mod trucks;
 pub mod truck_loads;
+pub mod shops;
 
 use axum::Router;
 use crate::state::AppState;
@@ -14,4 +15,5 @@ pub fn create_router() -> Router<AppState> {
         .merge(deliveries::routes())
         .merge(trucks::routes())
         .merge(truck_loads::routes())
+        .merge(shops::routes())
 }

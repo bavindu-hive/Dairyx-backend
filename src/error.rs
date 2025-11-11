@@ -67,6 +67,8 @@ impl From<sqlx::Error> for AppError {
                         AppError::Validation("quantity must be greater than 0".into()),
                     (Some("23514"), Some("batches_remaining_quantity_check")) =>
                         AppError::Validation("remaining_quantity must be between 0 and quantity".into()),
+                    (Some("23514"), Some("shops_distance_check")) =>
+                        AppError::Validation("Distance must be greater than or equal to 0".into()),
                     (Some("23514"), _) =>
                         AppError::Validation("Constraint violation".into()),
 
