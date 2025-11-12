@@ -105,15 +105,8 @@ pub async fn create_delivery(
                 }
             };
 
-            // Insert batch_receipts linking this batch to this delivery_item
-            sqlx::query!(
-                r#"INSERT INTO batch_receipts (batch_id, delivery_id, delivery_item_id, quantity)
-                VALUES ($1,$2,$3,$4)"#,
-                batch_id,
-                delivery.id,
-                item_row.id,
-                b.quantity
-            ).execute(&mut *tx).await?;
+            // Stock movement is automatically logged by trigger_log_batch_delivery
+            // No manual insert needed here
 
             batches_out.push(DeliveryBatchResponse {
                 id: batch_id,
@@ -147,14 +140,23 @@ pub async fn get_delivery(
 
     let mut items_out = Vec::with_capacity(items.len());
     for it in items {
-        // Fetch batch receipts for this delivery_item to get per-delivery quantities
+        // Fetch batches created from this delivery_item via stock_movements
         let receipt_batches = sqlx::query!(
-            r#"SELECT br.batch_id, br.quantity as receipt_qty, b.batch_number, b.remaining_quantity, b.expiry_date
-               FROM batch_receipts br
-               JOIN batches b ON b.id = br.batch_id
-               WHERE br.delivery_item_id = $1
+            r#"SELECT 
+                sm.batch_id, 
+                (sm.quantity)::INT as "receipt_qty!", 
+                b.batch_number, 
+                b.remaining_quantity, 
+                b.expiry_date
+               FROM stock_movements sm
+               JOIN batches b ON b.id = sm.batch_id
+               WHERE sm.reference_type = 'delivery' 
+                 AND sm.reference_id = $1
+                 AND sm.movement_type = 'delivery_in'
+                 AND b.product_id = $2
                ORDER BY b.expiry_date ASC, b.id ASC"#,
-            it.id
+            d.id as i32,
+            it.product_id
         ).fetch_all(&db_pool).await?;
         
         items_out.push(DeliveryItemResponse {
@@ -163,7 +165,7 @@ pub async fn get_delivery(
             quantity: it.quantity,
             unit_price: it.unit_price,
             batches: receipt_batches.into_iter().map(|rb| DeliveryBatchResponse {
-                id: rb.batch_id,
+                id: rb.batch_id as i64,
                 batch_number: rb.batch_number,
                 quantity: rb.receipt_qty,
                 remaining_quantity: rb.remaining_quantity,
@@ -214,14 +216,23 @@ pub async fn update_delivery(
 
     let mut items_out = Vec::with_capacity(items.len());
     for it in items {
-        // Fetch batch receipts for this delivery_item to get per-delivery quantities
+        // Fetch batches created from this delivery_item via stock_movements
         let receipt_batches = sqlx::query!(
-            r#"SELECT br.batch_id, br.quantity as receipt_qty, b.batch_number, b.remaining_quantity, b.expiry_date
-               FROM batch_receipts br
-               JOIN batches b ON b.id = br.batch_id
-               WHERE br.delivery_item_id = $1
+            r#"SELECT 
+                sm.batch_id, 
+                (sm.quantity)::INT as "receipt_qty!", 
+                b.batch_number, 
+                b.remaining_quantity, 
+                b.expiry_date
+               FROM stock_movements sm
+               JOIN batches b ON b.id = sm.batch_id
+               WHERE sm.reference_type = 'delivery' 
+                 AND sm.reference_id = $1
+                 AND sm.movement_type = 'delivery_in'
+                 AND b.product_id = $2
                ORDER BY b.expiry_date ASC, b.id ASC"#,
-            it.id
+            id as i32,
+            it.product_id
         ).fetch_all(&db_pool).await?;
         
         items_out.push(DeliveryItemResponse {
@@ -230,7 +241,7 @@ pub async fn update_delivery(
             quantity: it.quantity,
             unit_price: it.unit_price,
             batches: receipt_batches.into_iter().map(|rb| DeliveryBatchResponse {
-                id: rb.batch_id,
+                id: rb.batch_id as i64,
                 batch_number: rb.batch_number,
                 quantity: rb.receipt_qty,
                 remaining_quantity: rb.remaining_quantity,
@@ -255,37 +266,43 @@ pub async fn delete_delivery(
         r#"SELECT EXISTS (
             SELECT 1 FROM sale_items si
             JOIN batches b ON b.id = si.batch_id
-            JOIN batch_receipts br ON br.batch_id = b.id
-            WHERE br.delivery_id = $1
+            JOIN stock_movements sm ON sm.batch_id = b.id
+            WHERE sm.reference_type = 'delivery' 
+              AND sm.reference_id = $1
+              AND sm.movement_type = 'delivery_in'
         ) as "exists!""#,
-        id
+        id as i32
     ).fetch_one(&mut *tx).await?;
     if locked { return Err(AppError::conflict("Cannot delete delivery with sold batches")); }
 
-    // Get all batch_receipts for this delivery
-    let receipts = sqlx::query!(
-        r#"SELECT batch_id, quantity FROM batch_receipts WHERE delivery_id = $1"#,
-        id
+    // Get all stock_movements for this delivery
+    let movements = sqlx::query!(
+        r#"SELECT batch_id, (quantity)::INT as "quantity!" FROM stock_movements 
+           WHERE reference_type = 'delivery' AND reference_id = $1 AND movement_type = 'delivery_in'"#,
+        id as i32
     ).fetch_all(&mut *tx).await?;
 
-    // Reduce batch quantities for each receipt, delete batch if quantity becomes 0
-    for r in receipts {
+    // Reduce batch quantities for each movement, delete batch if quantity becomes 0
+    for m in movements {
         let updated = sqlx::query!(
             r#"UPDATE batches SET quantity = quantity - $1, remaining_quantity = remaining_quantity - $1
                WHERE id = $2
                RETURNING quantity"#,
-            r.quantity,
-            r.batch_id
+            m.quantity,
+            m.batch_id as i64
         ).fetch_one(&mut *tx).await?;
 
         // If batch is now empty, delete it
         if updated.quantity <= 0 {
-            sqlx::query!("DELETE FROM batches WHERE id = $1", r.batch_id).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM batches WHERE id = $1", m.batch_id as i64).execute(&mut *tx).await?;
         }
     }
 
-    // Delete batch_receipts
-    sqlx::query!("DELETE FROM batch_receipts WHERE delivery_id = $1", id).execute(&mut *tx).await?;
+    // Delete stock_movements for this delivery
+    sqlx::query!(
+        "DELETE FROM stock_movements WHERE reference_type = 'delivery' AND reference_id = $1",
+        id as i32
+    ).execute(&mut *tx).await?;
     
     // Delete delivery_items
     sqlx::query!("DELETE FROM delivery_items WHERE delivery_id = $1", id).execute(&mut *tx).await?;
