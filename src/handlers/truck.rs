@@ -2,7 +2,7 @@ use axum::{extract::State, Json};
 use axum::http::StatusCode;
 use crate::state::AppState;
 use crate::error::AppError;
-use crate::dtos::truck::{CreateTruckRequest, UpdateTruckRequest, TruckResponse, TruckSummary};
+use crate::dtos::truck::{CreateTruckRequest, UpdateTruckRequest, UpdateTruckMaxLimitRequest, TruckResponse, TruckSummary};
 use crate::middleware::auth::AuthContext;
 use axum::extract::Extension;
 
@@ -37,7 +37,7 @@ pub async fn create_truck(
     let truck = sqlx::query!(
         r#"INSERT INTO trucks (truck_number, driver_id)
         VALUES ($1, $2)
-        RETURNING id, truck_number, driver_id, is_active, created_at"#,
+        RETURNING id, truck_number, driver_id, is_active, (max_allowance_limit)::FLOAT8 as "max_allowance_limit!", created_at"#,
         req.truck_number.trim(),
         req.driver_id
     )
@@ -80,6 +80,7 @@ pub async fn create_truck(
             driver_id: truck.driver_id,
             driver_username,
             is_active: truck.is_active,
+            max_allowance_limit: truck.max_allowance_limit,
             created_at: truck.created_at.unwrap(),
         }),
     ))
@@ -90,7 +91,7 @@ pub async fn get_truck(
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<TruckResponse>, AppError> {
     let truck = sqlx::query!(
-        r#"SELECT t.id, t.truck_number, t.driver_id, t.is_active, t.created_at, u.username as "driver_username?"
+        r#"SELECT t.id, t.truck_number, t.driver_id, t.is_active, (t.max_allowance_limit)::FLOAT8 as "max_allowance_limit!", t.created_at, u.username as "driver_username?"
         FROM trucks t
         LEFT JOIN users u ON t.driver_id = u.id
         WHERE t.id = $1"#,
@@ -106,6 +107,7 @@ pub async fn get_truck(
         driver_id: truck.driver_id,
         driver_username: truck.driver_username,
         is_active: truck.is_active,
+        max_allowance_limit: truck.max_allowance_limit,
         created_at: truck.created_at.unwrap(),
     }))
 }
@@ -184,7 +186,7 @@ pub async fn update_truck(
             driver_id = $3,
             is_active = COALESCE($4, is_active)
         WHERE id = $1
-        RETURNING id, truck_number, driver_id, is_active, created_at"#,
+        RETURNING id, truck_number, driver_id, is_active, (max_allowance_limit)::FLOAT8 as "max_allowance_limit!", created_at"#,
         id,
         truck_number.as_deref().map(|s| s.trim()),
         driver_id,
@@ -227,6 +229,7 @@ pub async fn update_truck(
         driver_id: truck.driver_id,
         driver_username,
         is_active: truck.is_active,
+        max_allowance_limit: truck.max_allowance_limit,
         created_at: truck.created_at.unwrap(),
     }))
 }
@@ -273,4 +276,53 @@ pub async fn delete_truck(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn update_truck_max_limit(
+    State(AppState { db_pool }): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(req): Json<UpdateTruckMaxLimitRequest>,
+) -> Result<Json<TruckResponse>, AppError> {
+    if auth.role != "manager" {
+        return Err(AppError::forbidden("Only managers can update truck max limit"));
+    }
+
+    if req.max_allowance_limit < 0.0 {
+        return Err(AppError::validation("Max allowance limit cannot be negative"));
+    }
+
+    let truck = sqlx::query!(
+        r#"UPDATE trucks SET
+            max_allowance_limit = $2::FLOAT8
+        WHERE id = $1
+        RETURNING id, truck_number, driver_id, is_active, (max_allowance_limit)::FLOAT8 as "max_allowance_limit!", created_at"#,
+        id,
+        req.max_allowance_limit
+    )
+    .fetch_optional(&db_pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("Truck not found"))?;
+
+    // Fetch driver username if assigned
+    let driver_username = if let Some(driver_id) = truck.driver_id {
+        sqlx::query_scalar!(
+            r#"SELECT username FROM users WHERE id = $1"#,
+            driver_id
+        )
+        .fetch_optional(&db_pool)
+        .await?
+    } else {
+        None
+    };
+
+    Ok(Json(TruckResponse {
+        id: truck.id,
+        truck_number: truck.truck_number,
+        driver_id: truck.driver_id,
+        driver_username,
+        is_active: truck.is_active,
+        max_allowance_limit: truck.max_allowance_limit,
+        created_at: truck.created_at.unwrap(),
+    }))
 }

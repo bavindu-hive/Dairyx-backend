@@ -5,3 +5,4 @@ pub mod truck;
 pub mod truck_load;
 pub mod shop;
 pub mod sale;
+pub mod allowance;
