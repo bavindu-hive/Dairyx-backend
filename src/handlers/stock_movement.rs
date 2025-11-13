@@ -39,14 +39,13 @@ pub async fn get_batch_movements(
             sm.movement_date,
             SUM(
                 CASE 
-                    WHEN sm2.movement_type::TEXT IN ('delivery_in', 'truck_return_in', 'adjustment') 
-                    THEN (sm2.quantity)::FLOAT8
-                    ELSE -(sm2.quantity)::FLOAT8
+                    WHEN sm.movement_type::TEXT IN ('delivery_in', 'truck_return_in', 'adjustment') 
+                    THEN (sm.quantity)::FLOAT8
+                    ELSE -(sm.quantity)::FLOAT8
                 END
             ) OVER (ORDER BY sm.created_at, sm.id) as "running_balance!"
            FROM stock_movements sm
            LEFT JOIN users u ON sm.created_by = u.id
-           LEFT JOIN stock_movements sm2 ON sm2.batch_id = sm.batch_id AND sm2.id <= sm.id
            WHERE sm.batch_id = $1
            ORDER BY sm.created_at ASC, sm.id ASC"#,
         batch_id as i32
@@ -243,18 +242,28 @@ pub async fn create_stock_adjustment(
 
     // Create stock movement
     let notes = format!("{} - {}", req.reason, req.notes.unwrap_or_default());
-    let movement = sqlx::query!(
+    
+    // Build the movement_type cast for the query
+    let movement_type_value = format!("'{}'::stock_movement_type", req.movement_type);
+    
+    let query_str = format!(
         r#"INSERT INTO stock_movements 
            (batch_id, product_id, movement_type, quantity, reference_type, reference_id, 
             notes, created_by, movement_date)
-           VALUES ($1, $2, 'adjustment'::stock_movement_type, ($3)::FLOAT8, 'manual', 0, $4, $5, CURRENT_DATE)
+           VALUES ($1, $2, {}, ($3)::FLOAT8, 'manual', $6, $4, $5, CURRENT_DATE)
            RETURNING id, movement_date, created_at"#,
-        req.batch_id as i32,
-        req.product_id as i32,
-        req.quantity,
-        notes,
-        auth.user_id as i32
-    ).fetch_one(&mut *tx).await?;
+        movement_type_value
+    );
+    
+    let movement = sqlx::query_as::<_, (i32, NaiveDate, chrono::NaiveDateTime)>(&query_str)
+        .bind(req.batch_id as i32)
+        .bind(req.product_id as i32)
+        .bind(req.quantity)
+        .bind(notes.clone())
+        .bind(auth.user_id as i32)
+        .bind(req.batch_id as i32)  // Use batch_id as reference_id for manual adjustments
+        .fetch_one(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
@@ -265,18 +274,18 @@ pub async fn create_stock_adjustment(
     ).fetch_one(&db_pool).await?;
 
     Ok((StatusCode::CREATED, Json(StockMovementResponse {
-        id: movement.id,
+        id: movement.0,
         batch_id: req.batch_id as i32,
         product_id: req.product_id,
         product_name: product.name,
         movement_type: req.movement_type,
         quantity: req.quantity,
         reference_type: "manual".to_string(),
-        reference_id: 0,
+        reference_id: req.batch_id as i32,  // Use batch_id as reference
         notes: Some(notes),
         created_by: Some(auth.user_id),
         created_by_username: Some(auth.username),
-        movement_date: movement.movement_date,
-        created_at: movement.created_at,
+        movement_date: movement.1,
+        created_at: movement.2,
     })))
 }

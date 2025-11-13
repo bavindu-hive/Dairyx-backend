@@ -12,7 +12,8 @@ pub struct CreateTruckLoadRequest {
 
 #[derive(Deserialize)]
 pub struct TruckLoadItemRequest {
-    pub batch_id: i64,
+    pub batch_id: Option<i64>,    // Specify exact batch
+    pub product_id: Option<i64>,   // Auto-select batches using FIFO
     pub quantity_loaded: i32,
 }
 

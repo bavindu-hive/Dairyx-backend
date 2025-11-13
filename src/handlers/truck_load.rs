@@ -65,68 +65,25 @@ pub async fn create_truck_load(
     // Validate and insert items
     let mut items = Vec::new();
     for item in &req.items {
-        // Verify batch exists and has enough quantity
-        let batch = sqlx::query!(
-            r#"SELECT b.id, b.product_id, b.batch_number, b.remaining_quantity, b.expiry_date, p.name as product_name
-            FROM batches b
-            JOIN products p ON b.product_id = p.id
-            WHERE b.id = $1"#,
-            item.batch_id
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| AppError::not_found(&format!("Batch {} not found", item.batch_id)))?;
-
-        if batch.remaining_quantity < item.quantity_loaded {
-            return Err(AppError::validation(&format!(
-                "Batch {} only has {} units remaining, cannot load {}",
-                batch.batch_number, batch.remaining_quantity, item.quantity_loaded
-            )));
-        }
-
-        // Insert truck load item
-        let load_item = sqlx::query!(
-            r#"INSERT INTO truck_load_items (truck_load_id, batch_id, quantity_loaded)
-            VALUES ($1, $2, $3)
-            RETURNING id, truck_load_id, batch_id, quantity_loaded, quantity_sold, quantity_returned, created_at"#,
-            truck_load.id,
-            item.batch_id,
-            item.quantity_loaded
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| {
-            if let Some(db) = e.as_database_error() {
-                if db.code().as_deref() == Some("23505") {
-                    return AppError::conflict(&format!("Batch {} already added to this truck load", batch.batch_number));
-                }
+        // Validate that exactly one of batch_id or product_id is provided
+        match (item.batch_id, item.product_id) {
+            (None, None) => {
+                return Err(AppError::validation("Each item must have either batch_id or product_id"));
             }
-            AppError::db(e)
-        })?;
-
-        // Deduct loaded quantity from batch remaining_quantity
-        sqlx::query!(
-            r#"UPDATE batches 
-            SET remaining_quantity = remaining_quantity - $2
-            WHERE id = $1"#,
-            item.batch_id,
-            item.quantity_loaded
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        items.push(TruckLoadItemResponse {
-            id: load_item.id,
-            batch_id: batch.id,
-            batch_number: batch.batch_number,
-            product_id: batch.product_id,
-            product_name: batch.product_name,
-            expiry_date: batch.expiry_date,
-            quantity_loaded: load_item.quantity_loaded,
-            quantity_sold: load_item.quantity_sold,
-            quantity_returned: load_item.quantity_returned,
-            quantity_lost_damaged: load_item.quantity_loaded - load_item.quantity_sold - load_item.quantity_returned,
-        });
+            (Some(_), Some(_)) => {
+                return Err(AppError::validation("Each item cannot have both batch_id and product_id"));
+            }
+            (Some(batch_id), None) => {
+                // Manual batch selection (existing logic)
+                let loaded_items = load_specific_batch(&mut tx, truck_load.id as i64, batch_id, item.quantity_loaded).await?;
+                items.extend(loaded_items);
+            }
+            (None, Some(product_id)) => {
+                // Auto FIFO batch selection
+                let loaded_items = load_product_fifo(&mut tx, truck_load.id as i64, product_id, item.quantity_loaded).await?;
+                items.extend(loaded_items);
+            }
+        }
     }
 
     // Commit transaction
@@ -471,4 +428,162 @@ async fn fetch_truck_load_by_id(db_pool: &PgPool, id: i64) -> Result<TruckLoadRe
             product_lines,
         },
     })
+}
+
+// ==================== Helper Functions ====================
+
+/// Load a specific batch (manual selection)
+async fn load_specific_batch(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    truck_load_id: i64,
+    batch_id: i64,
+    quantity_loaded: i32,
+) -> Result<Vec<TruckLoadItemResponse>, AppError> {
+    // Verify batch exists and has enough quantity
+    let batch = sqlx::query!(
+        r#"SELECT b.id, b.product_id, b.batch_number, b.remaining_quantity, b.expiry_date, p.name as product_name
+        FROM batches b
+        JOIN products p ON b.product_id = p.id
+        WHERE b.id = $1"#,
+        batch_id
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| AppError::not_found(&format!("Batch {} not found", batch_id)))?;
+
+    if batch.remaining_quantity < quantity_loaded {
+        return Err(AppError::validation(&format!(
+            "Batch {} only has {} units remaining, cannot load {}",
+            batch.batch_number, batch.remaining_quantity, quantity_loaded
+        )));
+    }
+
+    // Insert truck load item
+    let load_item = sqlx::query!(
+        r#"INSERT INTO truck_load_items (truck_load_id, batch_id, quantity_loaded)
+        VALUES ($1, $2, $3)
+        RETURNING id, truck_load_id, batch_id, quantity_loaded, quantity_sold, quantity_returned, created_at"#,
+        truck_load_id as i32,
+        batch_id,
+        quantity_loaded
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| {
+        if let Some(db) = e.as_database_error() {
+            if db.code().as_deref() == Some("23505") {
+                return AppError::conflict(&format!("Batch {} already added to this truck load", batch.batch_number));
+            }
+        }
+        AppError::db(e)
+    })?;
+
+    // Deduct loaded quantity from batch remaining_quantity
+    sqlx::query!(
+        r#"UPDATE batches 
+        SET remaining_quantity = remaining_quantity - $2
+        WHERE id = $1"#,
+        batch_id,
+        quantity_loaded
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(vec![TruckLoadItemResponse {
+        id: load_item.id,
+        batch_id: batch.id,
+        batch_number: batch.batch_number,
+        product_id: batch.product_id,
+        product_name: batch.product_name,
+        expiry_date: batch.expiry_date,
+        quantity_loaded: load_item.quantity_loaded,
+        quantity_sold: load_item.quantity_sold,
+        quantity_returned: load_item.quantity_returned,
+        quantity_lost_damaged: load_item.quantity_loaded - load_item.quantity_sold - load_item.quantity_returned,
+    }])
+}
+
+/// Load product using FIFO (First In First Out by expiry date)
+async fn load_product_fifo(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    truck_load_id: i64,
+    product_id: i64,
+    total_quantity_needed: i32,
+) -> Result<Vec<TruckLoadItemResponse>, AppError> {
+    // Get available batches for this product, ordered by expiry date (FIFO)
+    let batches = sqlx::query!(
+        r#"SELECT b.id, b.batch_number, b.remaining_quantity, b.expiry_date, p.name as product_name
+        FROM batches b
+        JOIN products p ON b.product_id = p.id
+        WHERE b.product_id = $1 AND b.remaining_quantity > 0
+        ORDER BY b.expiry_date ASC, b.created_at ASC"#,
+        product_id
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    if batches.is_empty() {
+        return Err(AppError::not_found(&format!("No available batches found for product {}", product_id)));
+    }
+
+    // Calculate total available quantity
+    let total_available: i32 = batches.iter().map(|b| b.remaining_quantity).sum();
+    if total_available < total_quantity_needed {
+        return Err(AppError::validation(&format!(
+            "Insufficient stock for product {}. Available: {}, Requested: {}",
+            product_id, total_available, total_quantity_needed
+        )));
+    }
+
+    // Allocate quantity across batches using FIFO
+    let mut remaining_to_load = total_quantity_needed;
+    let mut loaded_items = Vec::new();
+
+    for batch in batches {
+        if remaining_to_load == 0 {
+            break;
+        }
+
+        let quantity_from_this_batch = remaining_to_load.min(batch.remaining_quantity);
+
+        // Insert truck load item
+        let load_item = sqlx::query!(
+            r#"INSERT INTO truck_load_items (truck_load_id, batch_id, quantity_loaded)
+            VALUES ($1, $2, $3)
+            RETURNING id, truck_load_id, batch_id, quantity_loaded, quantity_sold, quantity_returned, created_at"#,
+            truck_load_id as i32,
+            batch.id,
+            quantity_from_this_batch
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+
+        // Deduct loaded quantity from batch remaining_quantity
+        sqlx::query!(
+            r#"UPDATE batches 
+            SET remaining_quantity = remaining_quantity - $2
+            WHERE id = $1"#,
+            batch.id,
+            quantity_from_this_batch
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        loaded_items.push(TruckLoadItemResponse {
+            id: load_item.id,
+            batch_id: batch.id,
+            batch_number: batch.batch_number,
+            product_id: product_id,
+            product_name: batch.product_name,
+            expiry_date: batch.expiry_date,
+            quantity_loaded: load_item.quantity_loaded,
+            quantity_sold: load_item.quantity_sold,
+            quantity_returned: load_item.quantity_returned,
+            quantity_lost_damaged: load_item.quantity_loaded - load_item.quantity_sold - load_item.quantity_returned,
+        });
+
+        remaining_to_load -= quantity_from_this_batch;
+    }
+
+    Ok(loaded_items)
 }
