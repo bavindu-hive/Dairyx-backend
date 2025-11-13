@@ -67,10 +67,34 @@ impl From<sqlx::Error> for AppError {
                         AppError::Validation("quantity must be greater than 0".into()),
                     (Some("23514"), Some("batches_remaining_quantity_check")) =>
                         AppError::Validation("remaining_quantity must be between 0 and quantity".into()),
+                    (Some("23514"), Some("batches_check")) =>
+                        AppError::Validation("Batch quantity constraint: remaining_quantity must be between 0 and initial quantity".into()),
                     (Some("23514"), Some("shops_distance_check")) =>
                         AppError::Validation("Distance must be greater than or equal to 0".into()),
+                    // Sales constraints
+                    (Some("23514"), Some("sales_check")) =>
+                        AppError::Validation("Sales constraint: amount_paid must be between 0 and total_amount".into()),
+                    (Some("23514"), Some("sales_total_amount_check")) =>
+                        AppError::Validation("Total amount must be greater than or equal to 0".into()),
+                    (Some("23514"), Some("sales_payment_status_check")) =>
+                        AppError::Validation("Payment status must be 'paid' or 'pending'".into()),
+                    // Sale items constraints
+                    (Some("23514"), Some("sale_items_quantity_check")) =>
+                        AppError::Validation("Sale item quantity must be greater than 0".into()),
+                    (Some("23514"), Some("sale_items_unit_price_check")) =>
+                        AppError::Validation("Sale item unit_price must be greater than or equal to 0".into()),
+                    (Some("23514"), Some("sale_items_commission_earned_check")) =>
+                        AppError::Validation("Commission earned must be greater than or equal to 0".into()),
+                    // Truck load items constraints
+                    (Some("23514"), Some("truck_load_items_check")) =>
+                        AppError::Validation("Truck load constraint: quantity_sold cannot exceed quantity_loaded".into()),
+                    (Some("23514"), Some("truck_load_items_check1")) =>
+                        AppError::Validation("Truck load constraint: quantity_sold + quantity_returned cannot exceed quantity_loaded".into()),
+                    // Reconciliation constraints
+                    (Some("23514"), Some("valid_stock_balance")) =>
+                        AppError::Validation("Reconciliation balance error: items_loaded must equal (items_sold + items_returned + items_discarded) when verified".into()),
                     (Some("23514"), _) =>
-                        AppError::Validation("Constraint violation".into()),
+                        AppError::Validation(format!("Constraint violation: {:?}", constraint).into()),
 
                     // unique_violation
                     (Some("23505"), Some("deliveries_delivery_note_number_key")) =>
