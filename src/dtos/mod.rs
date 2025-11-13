@@ -7,3 +7,4 @@ pub mod shop;
 pub mod sale;
 pub mod allowance;
 pub mod reconciliation;
+pub mod batch;

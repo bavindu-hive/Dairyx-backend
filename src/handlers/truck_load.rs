@@ -387,17 +387,27 @@ async fn fetch_truck_load_by_id(db_pool: &PgPool, id: i64) -> Result<TruckLoadRe
 
     let items: Vec<TruckLoadItemResponse> = items_data
         .into_iter()
-        .map(|item| TruckLoadItemResponse {
-            id: item.id,
-            batch_id: item.batch_id,
-            batch_number: item.batch_number,
-            product_id: item.product_id,
-            product_name: item.product_name,
-            expiry_date: item.expiry_date,
-            quantity_loaded: item.quantity_loaded,
-            quantity_sold: item.quantity_sold,
-            quantity_returned: item.quantity_returned,
-            quantity_lost_damaged: item.quantity_loaded - item.quantity_sold - item.quantity_returned,
+        .map(|item| {
+            // Only calculate lost/damaged if truck is reconciled
+            // For loaded status, we don't know yet what will be lost
+            let quantity_lost_damaged = if truck_load.status == "reconciled" {
+                item.quantity_loaded - item.quantity_sold - item.quantity_returned
+            } else {
+                0 // Truck is still out, we don't know losses yet
+            };
+            
+            TruckLoadItemResponse {
+                id: item.id,
+                batch_id: item.batch_id,
+                batch_number: item.batch_number,
+                product_id: item.product_id,
+                product_name: item.product_name,
+                expiry_date: item.expiry_date,
+                quantity_loaded: item.quantity_loaded,
+                quantity_sold: item.quantity_sold,
+                quantity_returned: item.quantity_returned,
+                quantity_lost_damaged,
+            }
         })
         .collect();
 
@@ -405,7 +415,12 @@ async fn fetch_truck_load_by_id(db_pool: &PgPool, id: i64) -> Result<TruckLoadRe
     let total_loaded: i32 = items.iter().map(|i| i.quantity_loaded).sum();
     let total_sold: i32 = items.iter().map(|i| i.quantity_sold).sum();
     let total_returned: i32 = items.iter().map(|i| i.quantity_returned).sum();
-    let total_lost_damaged = total_loaded - total_sold - total_returned;
+    // Only calculate total lost/damaged if reconciled
+    let total_lost_damaged = if truck_load.status == "reconciled" {
+        total_loaded - total_sold - total_returned
+    } else {
+        0
+    };
     let product_lines = items.len() as i32;
 
     Ok(TruckLoadResponse {
@@ -489,6 +504,7 @@ async fn load_specific_batch(
     .execute(&mut **tx)
     .await?;
 
+    // Truck is just being loaded, no losses yet
     Ok(vec![TruckLoadItemResponse {
         id: load_item.id,
         batch_id: batch.id,
@@ -499,7 +515,7 @@ async fn load_specific_batch(
         quantity_loaded: load_item.quantity_loaded,
         quantity_sold: load_item.quantity_sold,
         quantity_returned: load_item.quantity_returned,
-        quantity_lost_damaged: load_item.quantity_loaded - load_item.quantity_sold - load_item.quantity_returned,
+        quantity_lost_damaged: 0, // Status is 'loaded', losses not determined yet
     }])
 }
 
@@ -579,7 +595,7 @@ async fn load_product_fifo(
             quantity_loaded: load_item.quantity_loaded,
             quantity_sold: load_item.quantity_sold,
             quantity_returned: load_item.quantity_returned,
-            quantity_lost_damaged: load_item.quantity_loaded - load_item.quantity_sold - load_item.quantity_returned,
+            quantity_lost_damaged: 0, // Status is 'loaded', losses not determined yet
         });
 
         remaining_to_load -= quantity_from_this_batch;
