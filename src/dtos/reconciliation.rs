@@ -1,6 +1,20 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+// ==================== Enums ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "stock_movement_type", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum StockMovementType {
+    DeliveryIn,      // Stock received from CreamyLand delivery
+    TruckLoadOut,    // Stock loaded onto truck
+    SaleOut,         // Stock sold from truck to shop
+    TruckReturnIn,   // Stock returned from truck to batch
+    Adjustment,      // Manual adjustment (damaged, expired, correction)
+    ExpiredOut,      // Stock removed due to expiry
+}
+
 // ==================== Reconciliation DTOs ====================
 
 #[derive(Debug, Deserialize)]
@@ -117,7 +131,7 @@ pub struct CreateStockAdjustmentRequest {
     pub batch_id: i64,
     pub product_id: i64,
     pub quantity: f64,
-    pub movement_type: String, // "adjustment" or "expired_out"
+    pub movement_type: StockMovementType, // Use enum instead of String
     pub reason: String,
     pub notes: Option<String>,
 }
@@ -128,7 +142,7 @@ pub struct StockMovementResponse {
     pub batch_id: i32,
     pub product_id: i64,
     pub product_name: String,
-    pub movement_type: String,
+    pub movement_type: StockMovementType,
     pub quantity: f64,
     pub reference_type: String,
     pub reference_id: i32,
@@ -153,7 +167,7 @@ pub struct BatchMovementHistory {
 #[derive(Debug, Serialize)]
 pub struct StockMovementDetail {
     pub id: i32,
-    pub movement_type: String,
+    pub movement_type: StockMovementType,
     pub quantity: f64,
     pub reference_type: String,
     pub reference_id: i32,
@@ -178,7 +192,7 @@ pub struct ProductStockSummary {
 
 #[derive(Debug, Serialize)]
 pub struct MovementTypeSummary {
-    pub movement_type: String,
+    pub movement_type: StockMovementType,
     pub transaction_count: i64,
     pub total_quantity: f64,
 }

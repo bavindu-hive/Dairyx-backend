@@ -30,7 +30,7 @@ pub async fn get_batch_movements(
     let movements = sqlx::query!(
         r#"SELECT 
             sm.id,
-            sm.movement_type::TEXT as "movement_type!",
+            sm.movement_type as "movement_type!: StockMovementType",
             (sm.quantity)::FLOAT8 as "quantity!",
             sm.reference_type::TEXT as "reference_type!",
             sm.reference_id,
@@ -39,7 +39,7 @@ pub async fn get_batch_movements(
             sm.movement_date,
             SUM(
                 CASE 
-                    WHEN sm.movement_type::TEXT IN ('delivery_in', 'truck_return_in', 'adjustment') 
+                    WHEN sm.movement_type IN ('delivery_in', 'truck_return_in', 'adjustment') 
                     THEN (sm.quantity)::FLOAT8
                     ELSE -(sm.quantity)::FLOAT8
                 END
@@ -85,7 +85,7 @@ pub async fn get_daily_movements(
         r#"SELECT 
             sm.product_id,
             p.name as product_name,
-            sm.movement_type::TEXT as "movement_type!",
+            sm.movement_type as "movement_type!: StockMovementType",
             COUNT(*) as "transaction_count!",
             SUM((sm.quantity)::FLOAT8) as "total_quantity!"
            FROM stock_movements sm
@@ -201,13 +201,26 @@ pub async fn create_stock_adjustment(
         return Err(AppError::forbidden("Only managers can create stock adjustments"));
     }
 
-    // Validate movement type
-    if req.movement_type != "adjustment" && req.movement_type != "expired_out" {
-        return Err(AppError::validation("movement_type must be 'adjustment' or 'expired_out'"));
+    // Validate movement type - only adjustment and expired_out are allowed
+    use crate::dtos::reconciliation::StockMovementType;
+    match req.movement_type {
+        StockMovementType::Adjustment | StockMovementType::ExpiredOut => {},
+        _ => return Err(AppError::validation("movement_type must be 'adjustment' or 'expired_out'")),
     }
 
-    if req.quantity <= 0.0 {
-        return Err(AppError::validation("Quantity must be greater than 0"));
+    // Validate quantity based on movement type
+    match req.movement_type {
+        StockMovementType::ExpiredOut => {
+            if req.quantity <= 0.0 {
+                return Err(AppError::validation("Quantity must be greater than 0 for expired_out"));
+            }
+        },
+        StockMovementType::Adjustment => {
+            if req.quantity == 0.0 {
+                return Err(AppError::validation("Adjustment quantity cannot be 0. Use positive for increase, negative for decrease"));
+            }
+        },
+        _ => unreachable!(),
     }
 
     let mut tx = db_pool.begin().await?;
@@ -223,45 +236,64 @@ pub async fn create_stock_adjustment(
         return Err(AppError::validation("Product ID does not match batch"));
     }
 
-    // For removal operations (expired_out), check if enough stock
-    if req.movement_type == "expired_out" {
-        if batch.remaining_quantity < req.quantity as i32 {
-            return Err(AppError::validation(format!(
-                "Insufficient stock. Available: {}, Requested: {}",
-                batch.remaining_quantity, req.quantity
-            )));
-        }
-
-        // Update batch remaining quantity
-        sqlx::query!(
-            r#"UPDATE batches SET remaining_quantity = remaining_quantity - $1 WHERE id = $2"#,
-            req.quantity as i32,
-            req.batch_id
-        ).execute(&mut *tx).await?;
+    // Handle stock updates based on movement type
+    match req.movement_type {
+        StockMovementType::ExpiredOut => {
+            // For removals, check if enough stock
+            if batch.remaining_quantity < req.quantity as i32 {
+                return Err(AppError::validation(format!(
+                    "Insufficient stock. Available: {}, Requested: {}",
+                    batch.remaining_quantity, req.quantity
+                )));
+            }
+            // Decrease batch quantity
+            sqlx::query!(
+                r#"UPDATE batches SET remaining_quantity = remaining_quantity - $1 WHERE id = $2"#,
+                req.quantity as i32,
+                req.batch_id
+            ).execute(&mut *tx).await?;
+        },
+        StockMovementType::Adjustment => {
+            // For adjustments, quantity can be positive (increase) or negative (decrease)
+            // If decrease, check sufficient stock
+            if req.quantity < 0.0 && batch.remaining_quantity < req.quantity.abs() as i32 {
+                return Err(AppError::validation(format!(
+                    "Insufficient stock. Available: {}, Requested decrease: {}",
+                    batch.remaining_quantity, req.quantity.abs()
+                )));
+            }
+            // Update BOTH quantity and remaining_quantity to maintain constraint
+            // remaining_quantity must always be <= quantity
+            sqlx::query!(
+                r#"UPDATE batches 
+                   SET quantity = quantity + $1,
+                       remaining_quantity = remaining_quantity + $1 
+                   WHERE id = $2"#,
+                req.quantity as i32,
+                req.batch_id
+            ).execute(&mut *tx).await?;
+        },
+        _ => unreachable!(), // Already validated above
     }
 
     // Create stock movement
     let notes = format!("{} - {}", req.reason, req.notes.unwrap_or_default());
     
-    // Build the movement_type cast for the query
-    let movement_type_value = format!("'{}'::stock_movement_type", req.movement_type);
-    
-    let query_str = format!(
+    // Insert with enum type - sqlx handles the conversion automatically
+    let movement = sqlx::query_as::<_, (i32, NaiveDate, chrono::NaiveDateTime)>(
         r#"INSERT INTO stock_movements 
            (batch_id, product_id, movement_type, quantity, reference_type, reference_id, 
             notes, created_by, movement_date)
-           VALUES ($1, $2, {}, ($3)::FLOAT8, 'manual', $6, $4, $5, CURRENT_DATE)
-           RETURNING id, movement_date, created_at"#,
-        movement_type_value
-    );
-    
-    let movement = sqlx::query_as::<_, (i32, NaiveDate, chrono::NaiveDateTime)>(&query_str)
+           VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, CURRENT_DATE)
+           RETURNING id, movement_date, created_at"#
+    )
         .bind(req.batch_id as i32)
         .bind(req.product_id as i32)
+        .bind(&req.movement_type)  // Enum is automatically converted
         .bind(req.quantity)
+        .bind(req.batch_id as i32)  // Use batch_id as reference_id for manual adjustments
         .bind(notes.clone())
         .bind(auth.user_id as i32)
-        .bind(req.batch_id as i32)  // Use batch_id as reference_id for manual adjustments
         .fetch_one(&mut *tx)
         .await?;
 
