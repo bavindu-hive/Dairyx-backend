@@ -564,6 +564,20 @@ async fn load_specific_batch(
     .execute(&mut **tx)
     .await?;
 
+    // Create stock movement for truck_load_out
+    sqlx::query!(
+        r#"INSERT INTO stock_movements 
+           (batch_id, product_id, movement_type, quantity, reference_type, reference_id, notes, movement_date)
+           VALUES ($1, $2, 'truck_load_out', ($3)::FLOAT8::NUMERIC, 'truck_load', $4, $5, CURRENT_DATE)"#,
+        batch_id as i32,
+        batch.product_id as i32,
+        quantity_loaded as f64,
+        truck_load_id as i32,
+        format!("Loaded to truck - Batch: {}", batch.batch_number)
+    )
+    .execute(&mut **tx)
+    .await?;
+
     // Truck is just being loaded, no losses yet
     Ok(vec![TruckLoadItemResponse {
         id: load_item.id,
@@ -644,6 +658,20 @@ async fn load_product_fifo(
             WHERE id = $1"#,
             batch.id,
             quantity_from_this_batch
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        // Create stock movement for truck_load_out
+        sqlx::query!(
+            r#"INSERT INTO stock_movements 
+               (batch_id, product_id, movement_type, quantity, reference_type, reference_id, notes, movement_date)
+               VALUES ($1, $2, 'truck_load_out', ($3)::FLOAT8::NUMERIC, 'truck_load', $4, $5, CURRENT_DATE)"#,
+            batch.id as i32,
+            product_id as i32,
+            quantity_from_this_batch as f64,
+            truck_load_id as i32,
+            format!("Loaded to truck - Batch: {}", batch.batch_number)
         )
         .execute(&mut **tx)
         .await?;
