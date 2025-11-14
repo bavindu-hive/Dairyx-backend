@@ -1,12 +1,13 @@
-use axum::{extract::{State, Path}, Json, Extension, http::StatusCode};
+use crate::{
+    dtos::reconciliation::*, error::AppError, middleware::auth::AuthContext, state::AppState,
+};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Extension, Json,
+};
 use chrono::NaiveDate;
 use sqlx::Row;
-use crate::{
-    state::AppState,
-    error::AppError,
-    middleware::auth::AuthContext,
-    dtos::reconciliation::*,
-};
 
 // ==================== Get Batch Movements ====================
 
@@ -23,8 +24,10 @@ pub async fn get_batch_movements(
            JOIN products p ON b.product_id = p.id
            WHERE b.id = $1"#,
         batch_id
-    ).fetch_optional(&db_pool).await?
-        .ok_or_else(|| AppError::not_found("Batch not found"))?;
+    )
+    .fetch_optional(&db_pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("Batch not found"))?;
 
     // Get all movements for this batch with running balance
     let movements = sqlx::query!(
@@ -49,19 +52,24 @@ pub async fn get_batch_movements(
            WHERE sm.batch_id = $1
            ORDER BY sm.created_at ASC, sm.id ASC"#,
         batch_id as i32
-    ).fetch_all(&db_pool).await?;
+    )
+    .fetch_all(&db_pool)
+    .await?;
 
-    let movement_details = movements.into_iter().map(|m| StockMovementDetail {
-        id: m.id,
-        movement_type: m.movement_type,
-        quantity: m.quantity,
-        reference_type: m.reference_type,
-        reference_id: m.reference_id,
-        notes: m.notes,
-        created_by: m.created_by,
-        movement_date: m.movement_date,
-        running_balance: m.running_balance,
-    }).collect();
+    let movement_details = movements
+        .into_iter()
+        .map(|m| StockMovementDetail {
+            id: m.id,
+            movement_type: m.movement_type,
+            quantity: m.quantity,
+            reference_type: m.reference_type,
+            reference_id: m.reference_id,
+            notes: m.notes,
+            created_by: m.created_by,
+            movement_date: m.movement_date,
+            running_balance: m.running_balance,
+        })
+        .collect();
 
     Ok(Json(BatchMovementHistory {
         batch_id: batch.id,
@@ -94,14 +102,17 @@ pub async fn get_daily_movements(
            GROUP BY sm.product_id, p.name, sm.movement_type
            ORDER BY sm.product_id, sm.movement_type"#,
         date
-    ).fetch_all(&db_pool).await?;
+    )
+    .fetch_all(&db_pool)
+    .await?;
 
     // Group by product
-    let mut product_map: std::collections::HashMap<i64, (String, Vec<MovementTypeSummary>)> = 
+    let mut product_map: std::collections::HashMap<i64, (String, Vec<MovementTypeSummary>)> =
         std::collections::HashMap::new();
 
     for m in movements {
-        let entry = product_map.entry(m.product_id as i64)
+        let entry = product_map
+            .entry(m.product_id as i64)
             .or_insert((m.product_name.clone(), Vec::new()));
         entry.1.push(MovementTypeSummary {
             movement_type: m.movement_type,
@@ -110,13 +121,16 @@ pub async fn get_daily_movements(
         });
     }
 
-    let product_summaries = product_map.into_iter().map(|(product_id, (product_name, movements))| {
-        ProductStockSummary {
-            product_id,
-            product_name,
-            movements,
-        }
-    }).collect();
+    let product_summaries = product_map
+        .into_iter()
+        .map(
+            |(product_id, (product_name, movements))| ProductStockSummary {
+                product_id,
+                product_name,
+                movements,
+            },
+        )
+        .collect();
 
     Ok(Json(DailyStockSummary {
         movement_date: date,
@@ -132,9 +146,11 @@ pub async fn get_product_movements(
     Path(product_id): Path<i64>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Vec<StockMovementResponse>>, AppError> {
-    let start_date = params.get("start_date")
+    let start_date = params
+        .get("start_date")
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
-    let end_date = params.get("end_date")
+    let end_date = params
+        .get("end_date")
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
     let movement_type = params.get("movement_type");
 
@@ -150,7 +166,7 @@ pub async fn get_product_movements(
            FROM stock_movements sm
            JOIN products p ON sm.product_id = p.id
            LEFT JOIN users u ON sm.created_by = u.id
-           WHERE sm.product_id = "#
+           WHERE sm.product_id = "#,
     );
     query.push_str(&product_id.to_string());
 
@@ -168,23 +184,37 @@ pub async fn get_product_movements(
 
     let rows = sqlx::query(&query).fetch_all(&db_pool).await?;
 
-    let movements: Vec<StockMovementResponse> = rows.iter().map(|row| {
-        StockMovementResponse {
-            id: row.get("id"),
-            batch_id: row.get("batch_id"),
-            product_id: row.get::<i32, _>("product_id") as i64,
-            product_name: row.get("product_name"),
-            movement_type: row.get("movement_type"),
-            quantity: row.get("quantity"),
-            reference_type: row.get("reference_type"),
-            reference_id: row.get("reference_id"),
-            notes: row.get("notes"),
-            created_by: row.get::<Option<i32>, _>("created_by").map(|id| id as i64),
-            created_by_username: row.get("created_by_username"),
-            movement_date: row.get("movement_date"),
-            created_at: row.get("created_at"),
-        }
-    }).collect();
+    let movements: Vec<StockMovementResponse> = rows
+        .iter()
+        .map(|row| {
+            let movement_type_str: String = row.get("movement_type");
+            let movement_type = match movement_type_str.as_str() {
+                "delivery_in" => StockMovementType::DeliveryIn,
+                "truck_load_out" => StockMovementType::TruckLoadOut,
+                "sale_out" => StockMovementType::SaleOut,
+                "truck_return_in" => StockMovementType::TruckReturnIn,
+                "adjustment" => StockMovementType::Adjustment,
+                "expired_out" => StockMovementType::ExpiredOut,
+                _ => StockMovementType::Adjustment, // fallback
+            };
+            
+            StockMovementResponse {
+                id: row.get("id"),
+                batch_id: row.get("batch_id"),
+                product_id: row.get::<i32, _>("product_id") as i64,
+                product_name: row.get("product_name"),
+                movement_type,
+                quantity: row.get("quantity"),
+                reference_type: row.get("reference_type"),
+                reference_id: row.get("reference_id"),
+                notes: row.get("notes"),
+                created_by: row.get::<Option<i32>, _>("created_by").map(|id| id as i64),
+                created_by_username: row.get("created_by_username"),
+                movement_date: row.get("movement_date"),
+                created_at: row.get("created_at"),
+            }
+        })
+        .collect();
 
     Ok(Json(movements))
 }
@@ -198,28 +228,36 @@ pub async fn create_stock_adjustment(
 ) -> Result<(StatusCode, Json<StockMovementResponse>), AppError> {
     // Only managers can create adjustments
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can create stock adjustments"));
+        return Err(AppError::forbidden(
+            "Only managers can create stock adjustments",
+        ));
     }
 
     // Validate movement type - only adjustment and expired_out are allowed
     use crate::dtos::reconciliation::StockMovementType;
     match req.movement_type {
-        StockMovementType::Adjustment | StockMovementType::ExpiredOut => {},
-        _ => return Err(AppError::validation("movement_type must be 'adjustment' or 'expired_out'")),
+        StockMovementType::Adjustment | StockMovementType::ExpiredOut => {}
+        _ => {
+            return Err(AppError::validation(
+                "movement_type must be 'adjustment' or 'expired_out'",
+            ))
+        }
     }
 
     // Validate quantity based on movement type
     match req.movement_type {
         StockMovementType::ExpiredOut => {
             if req.quantity <= 0.0 {
-                return Err(AppError::validation("Quantity must be greater than 0 for expired_out"));
+                return Err(AppError::validation(
+                    "Quantity must be greater than 0 for expired_out",
+                ));
             }
-        },
+        }
         StockMovementType::Adjustment => {
             if req.quantity == 0.0 {
                 return Err(AppError::validation("Adjustment quantity cannot be 0. Use positive for increase, negative for decrease"));
             }
-        },
+        }
         _ => unreachable!(),
     }
 
@@ -229,8 +267,10 @@ pub async fn create_stock_adjustment(
     let batch = sqlx::query!(
         r#"SELECT remaining_quantity, product_id FROM batches WHERE id = $1"#,
         req.batch_id
-    ).fetch_optional(&mut *tx).await?
-        .ok_or_else(|| AppError::not_found("Batch not found"))?;
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::not_found("Batch not found"))?;
 
     if batch.product_id != req.product_id {
         return Err(AppError::validation("Product ID does not match batch"));
@@ -251,15 +291,18 @@ pub async fn create_stock_adjustment(
                 r#"UPDATE batches SET remaining_quantity = remaining_quantity - $1 WHERE id = $2"#,
                 req.quantity as i32,
                 req.batch_id
-            ).execute(&mut *tx).await?;
-        },
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
         StockMovementType::Adjustment => {
             // For adjustments, quantity can be positive (increase) or negative (decrease)
             // If decrease, check sufficient stock
             if req.quantity < 0.0 && batch.remaining_quantity < req.quantity.abs() as i32 {
                 return Err(AppError::validation(format!(
                     "Insufficient stock. Available: {}, Requested decrease: {}",
-                    batch.remaining_quantity, req.quantity.abs()
+                    batch.remaining_quantity,
+                    req.quantity.abs()
                 )));
             }
             // Update BOTH quantity and remaining_quantity to maintain constraint
@@ -271,53 +314,57 @@ pub async fn create_stock_adjustment(
                    WHERE id = $2"#,
                 req.quantity as i32,
                 req.batch_id
-            ).execute(&mut *tx).await?;
-        },
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
         _ => unreachable!(), // Already validated above
     }
 
     // Create stock movement
     let notes = format!("{} - {}", req.reason, req.notes.unwrap_or_default());
-    
+
     // Insert with enum type - sqlx handles the conversion automatically
     let movement = sqlx::query_as::<_, (i32, NaiveDate, chrono::NaiveDateTime)>(
         r#"INSERT INTO stock_movements 
            (batch_id, product_id, movement_type, quantity, reference_type, reference_id, 
             notes, created_by, movement_date)
            VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, CURRENT_DATE)
-           RETURNING id, movement_date, created_at"#
+           RETURNING id, movement_date, created_at"#,
     )
-        .bind(req.batch_id as i32)
-        .bind(req.product_id as i32)
-        .bind(&req.movement_type)  // Enum is automatically converted
-        .bind(req.quantity)
-        .bind(req.batch_id as i32)  // Use batch_id as reference_id for manual adjustments
-        .bind(notes.clone())
-        .bind(auth.user_id as i32)
-        .fetch_one(&mut *tx)
-        .await?;
+    .bind(req.batch_id as i32)
+    .bind(req.product_id as i32)
+    .bind(&req.movement_type) // Enum is automatically converted
+    .bind(req.quantity)
+    .bind(req.batch_id as i32) // Use batch_id as reference_id for manual adjustments
+    .bind(notes.clone())
+    .bind(auth.user_id as i32)
+    .fetch_one(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 
     // Fetch product name
-    let product = sqlx::query!(
-        r#"SELECT name FROM products WHERE id = $1"#,
-        req.product_id
-    ).fetch_one(&db_pool).await?;
+    let product = sqlx::query!(r#"SELECT name FROM products WHERE id = $1"#, req.product_id)
+        .fetch_one(&db_pool)
+        .await?;
 
-    Ok((StatusCode::CREATED, Json(StockMovementResponse {
-        id: movement.0,
-        batch_id: req.batch_id as i32,
-        product_id: req.product_id,
-        product_name: product.name,
-        movement_type: req.movement_type,
-        quantity: req.quantity,
-        reference_type: "manual".to_string(),
-        reference_id: req.batch_id as i32,  // Use batch_id as reference
-        notes: Some(notes),
-        created_by: Some(auth.user_id),
-        created_by_username: Some(auth.username),
-        movement_date: movement.1,
-        created_at: movement.2,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(StockMovementResponse {
+            id: movement.0,
+            batch_id: req.batch_id as i32,
+            product_id: req.product_id,
+            product_name: product.name,
+            movement_type: req.movement_type,
+            quantity: req.quantity,
+            reference_type: "manual".to_string(),
+            reference_id: req.batch_id as i32, // Use batch_id as reference
+            notes: Some(notes),
+            created_by: Some(auth.user_id),
+            created_by_username: Some(auth.username),
+            movement_date: movement.1,
+            created_at: movement.2,
+        }),
+    ))
 }

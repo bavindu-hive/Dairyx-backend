@@ -1,12 +1,12 @@
-use axum::{extract::State, Json, Extension};
-use axum::http::StatusCode;
-use crate::state::AppState;
-use crate::error::AppError;
 use crate::dtos::truck_load::{
-    CreateTruckLoadRequest, ReconcileTruckLoadRequest, TruckLoadResponse, 
-    TruckLoadItemResponse, TruckLoadSummary, TruckLoadListItem
+    CreateTruckLoadRequest, ReconcileTruckLoadRequest, TruckLoadItemResponse, TruckLoadListItem,
+    TruckLoadResponse, TruckLoadSummary,
 };
+use crate::error::AppError;
 use crate::middleware::auth::AuthContext;
+use crate::state::AppState;
+use axum::http::StatusCode;
+use axum::{extract::State, Extension, Json};
 use sqlx::PgPool;
 
 pub async fn create_truck_load(
@@ -19,7 +19,9 @@ pub async fn create_truck_load(
     }
 
     if req.items.is_empty() {
-        return Err(AppError::validation("Truck load must contain at least one item"));
+        return Err(AppError::validation(
+            "Truck load must contain at least one item",
+        ));
     }
 
     // Verify truck exists and is active
@@ -56,7 +58,9 @@ pub async fn create_truck_load(
     .map_err(|e| {
         if let Some(db) = e.as_database_error() {
             if db.code().as_deref() == Some("23505") {
-                return AppError::conflict("A truck load already exists for this truck on this date");
+                return AppError::conflict(
+                    "A truck load already exists for this truck on this date",
+                );
             }
         }
         AppError::db(e)
@@ -68,19 +72,35 @@ pub async fn create_truck_load(
         // Validate that exactly one of batch_id or product_id is provided
         match (item.batch_id, item.product_id) {
             (None, None) => {
-                return Err(AppError::validation("Each item must have either batch_id or product_id"));
+                return Err(AppError::validation(
+                    "Each item must have either batch_id or product_id",
+                ));
             }
             (Some(_), Some(_)) => {
-                return Err(AppError::validation("Each item cannot have both batch_id and product_id"));
+                return Err(AppError::validation(
+                    "Each item cannot have both batch_id and product_id",
+                ));
             }
             (Some(batch_id), None) => {
                 // Manual batch selection (existing logic)
-                let loaded_items = load_specific_batch(&mut tx, truck_load.id as i64, batch_id, item.quantity_loaded).await?;
+                let loaded_items = load_specific_batch(
+                    &mut tx,
+                    truck_load.id as i64,
+                    batch_id,
+                    item.quantity_loaded,
+                )
+                .await?;
                 items.extend(loaded_items);
             }
             (None, Some(product_id)) => {
                 // Auto FIFO batch selection
-                let loaded_items = load_product_fifo(&mut tx, truck_load.id as i64, product_id, item.quantity_loaded).await?;
+                let loaded_items = load_product_fifo(
+                    &mut tx,
+                    truck_load.id as i64,
+                    product_id,
+                    item.quantity_loaded,
+                )
+                .await?;
                 items.extend(loaded_items);
             }
         }
@@ -140,7 +160,9 @@ pub async fn list_truck_loads(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Vec<TruckLoadListItem>>, AppError> {
     let truck_id = params.get("truck_id").and_then(|s| s.parse::<i64>().ok());
-    let load_date = params.get("load_date").and_then(|s| s.parse::<chrono::NaiveDate>().ok());
+    let load_date = params
+        .get("load_date")
+        .and_then(|s| s.parse::<chrono::NaiveDate>().ok());
     let status = params.get("status");
 
     let mut query_str = String::from(
@@ -154,7 +176,7 @@ pub async fn list_truck_loads(
         JOIN trucks t ON tl.truck_id = t.id
         LEFT JOIN users u ON t.driver_id = u.id
         LEFT JOIN truck_load_items tli ON tl.id = tli.truck_load_id
-        WHERE 1=1"#
+        WHERE 1=1"#,
     );
 
     if truck_id.is_some() {
@@ -165,15 +187,32 @@ pub async fn list_truck_loads(
         query_str.push_str(&format!(" AND tl.load_date = ${}", param_num));
     }
     if status.is_some() {
-        let param_num = if truck_id.is_some() && load_date.is_some() { 3 }
-                       else if truck_id.is_some() || load_date.is_some() { 2 }
-                       else { 1 };
+        let param_num = if truck_id.is_some() && load_date.is_some() {
+            3
+        } else if truck_id.is_some() || load_date.is_some() {
+            2
+        } else {
+            1
+        };
         query_str.push_str(&format!(" AND tl.status = ${}", param_num));
     }
 
     query_str.push_str(" GROUP BY tl.id, tl.truck_id, tl.load_date, tl.status, t.truck_number, u.username ORDER BY tl.load_date DESC, tl.id DESC");
 
-    let mut query = sqlx::query_as::<_, (i64, i64, chrono::NaiveDate, String, String, Option<String>, i32, i32, i32)>(&query_str);
+    let mut query = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            chrono::NaiveDate,
+            String,
+            String,
+            Option<String>,
+            i32,
+            i32,
+            i32,
+        ),
+    >(&query_str);
 
     if let Some(tid) = truck_id {
         query = query.bind(tid);
@@ -190,20 +229,32 @@ pub async fn list_truck_loads(
     Ok(Json(
         loads
             .into_iter()
-            .map(|(id, truck_id, load_date, status, truck_number, driver_username, total_loaded, total_sold, total_returned)| {
-                TruckLoadListItem {
+            .map(
+                |(
                     id,
                     truck_id,
-                    truck_number,
-                    driver_username,
                     load_date,
                     status,
+                    truck_number,
+                    driver_username,
                     total_loaded,
                     total_sold,
                     total_returned,
-                    total_lost_damaged: total_loaded - total_sold - total_returned,
-                }
-            })
+                )| {
+                    TruckLoadListItem {
+                        id,
+                        truck_id,
+                        truck_number,
+                        driver_username,
+                        load_date,
+                        status,
+                        total_loaded,
+                        total_sold,
+                        total_returned,
+                        total_lost_damaged: total_loaded - total_sold - total_returned,
+                    }
+                },
+            )
             .collect(),
     ))
 }
@@ -215,20 +266,19 @@ pub async fn reconcile_truck_load(
     Json(req): Json<ReconcileTruckLoadRequest>,
 ) -> Result<Json<TruckLoadResponse>, AppError> {
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can reconcile truck loads"));
+        return Err(AppError::forbidden(
+            "Only managers can reconcile truck loads",
+        ));
     }
 
     // Start transaction
     let mut tx = db_pool.begin().await?;
 
     // Verify truck load exists and is not already reconciled
-    let truck_load = sqlx::query!(
-        r#"SELECT id, status FROM truck_loads WHERE id = $1"#,
-        id
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::not_found("Truck load not found"))?;
+    let truck_load = sqlx::query!(r#"SELECT id, status FROM truck_loads WHERE id = $1"#, id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::not_found("Truck load not found"))?;
 
     if truck_load.status == "reconciled" {
         return Err(AppError::conflict("Truck load is already reconciled"));
@@ -247,13 +297,21 @@ pub async fn reconcile_truck_load(
         )
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::not_found(&format!("Batch {} not found in this truck load", return_item.batch_id)))?;
+        .ok_or_else(|| {
+            AppError::not_found(&format!(
+                "Batch {} not found in this truck load",
+                return_item.batch_id
+            ))
+        })?;
 
         // Validate returned quantity
         if result.quantity_sold + result.quantity_returned > result.quantity_loaded {
             return Err(AppError::validation(&format!(
                 "Batch {}: Total sold ({}) + returned ({}) cannot exceed loaded quantity ({})",
-                return_item.batch_id, result.quantity_sold, result.quantity_returned, result.quantity_loaded
+                return_item.batch_id,
+                result.quantity_sold,
+                result.quantity_returned,
+                result.quantity_loaded
             )));
         }
 
@@ -305,7 +363,9 @@ pub async fn delete_truck_load(
     .await?;
 
     if has_sales {
-        return Err(AppError::conflict("Cannot delete truck load with existing sales"));
+        return Err(AppError::conflict(
+            "Cannot delete truck load with existing sales",
+        ));
     }
 
     // Get all items to restore their quantities
@@ -395,7 +455,7 @@ async fn fetch_truck_load_by_id(db_pool: &PgPool, id: i64) -> Result<TruckLoadRe
             } else {
                 0 // Truck is still out, we don't know losses yet
             };
-            
+
             TruckLoadItemResponse {
                 id: item.id,
                 batch_id: item.batch_id,
@@ -539,7 +599,10 @@ async fn load_product_fifo(
     .await?;
 
     if batches.is_empty() {
-        return Err(AppError::not_found(&format!("No available batches found for product {}", product_id)));
+        return Err(AppError::not_found(&format!(
+            "No available batches found for product {}",
+            product_id
+        )));
     }
 
     // Calculate total available quantity

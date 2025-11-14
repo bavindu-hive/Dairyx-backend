@@ -1,13 +1,13 @@
 // src/handlers/products.rs
+use crate::dtos::product::{CreateProductRequest, ProductResponse, UpdateProductRequest};
+use crate::error::AppError;
+use crate::models::product::Product;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
 };
 use sqlx::Error as SqlxError;
-use crate::dtos::product::{CreateProductRequest, UpdateProductRequest, ProductResponse};
-use crate::models::product::Product;
-use crate::state::AppState;
-use crate::error::AppError;
 use tracing::{error, instrument};
 
 fn map_unique_violation(err: SqlxError, message: &str) -> AppError {
@@ -21,16 +21,19 @@ fn map_unique_violation(err: SqlxError, message: &str) -> AppError {
 
 // GET /products - List all products
 #[instrument(skip(state))]
-pub async fn get_products(State(state): State<AppState>) -> Result<Json<Vec<ProductResponse>>, AppError> {
+pub async fn get_products(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ProductResponse>>, AppError> {
     match sqlx::query_as::<_, Product>(
         "SELECT id, name,
                 current_wholesale_price::FLOAT8 AS current_wholesale_price,
                 commission_per_unit::FLOAT8     AS commission_per_unit,
                 created_at
-         FROM products ORDER BY name"
+         FROM products ORDER BY name",
     )
-        .fetch_all(&state.db_pool)
-        .await {
+    .fetch_all(&state.db_pool)
+    .await
+    {
         Ok(products) => {
             let response = products.into_iter().map(ProductResponse::from).collect();
             Ok(Json(response))
@@ -53,11 +56,11 @@ pub async fn get_product(
                 current_wholesale_price::FLOAT8 AS current_wholesale_price,
                 commission_per_unit::FLOAT8     AS commission_per_unit,
                 created_at
-         FROM products WHERE id = $1"
+         FROM products WHERE id = $1",
     )
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?
     .ok_or_else(|| AppError::not_found("Product not found"))?;
 
     Ok(Json(ProductResponse::from(product)))
@@ -74,7 +77,7 @@ pub async fn create_product(
          VALUES ($1, $2, $3) RETURNING id, name,
                 current_wholesale_price::FLOAT8 AS current_wholesale_price,
                 commission_per_unit::FLOAT8     AS commission_per_unit,
-                created_at"
+                created_at",
     )
     .bind(&payload.name)
     .bind(payload.current_wholesale_price)
@@ -101,7 +104,7 @@ pub async fn update_product(
          WHERE id = $4 RETURNING id, name,
                 current_wholesale_price::FLOAT8 AS current_wholesale_price,
                 commission_per_unit::FLOAT8     AS commission_per_unit,
-                created_at"
+                created_at",
     )
     .bind(payload.name)
     .bind(payload.current_wholesale_price)
@@ -127,7 +130,7 @@ pub async fn delete_product(
         .await?;
 
     if result.rows_affected() == 0 {
-    return Err(AppError::not_found("Product not found"));
+        return Err(AppError::not_found("Product not found"));
     }
 
     Ok(Json(()))

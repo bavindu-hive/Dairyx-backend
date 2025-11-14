@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 #[sqlx(type_name = "stock_movement_type", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum StockMovementType {
-    DeliveryIn,      // Stock received from CreamyLand delivery
-    TruckLoadOut,    // Stock loaded onto truck
-    SaleOut,         // Stock sold from truck to shop
-    TruckReturnIn,   // Stock returned from truck to batch
-    Adjustment,      // Manual adjustment (damaged, expired, correction)
-    ExpiredOut,      // Stock removed due to expiry
+    DeliveryIn,    // Stock received from CreamyLand delivery
+    TruckLoadOut,  // Stock loaded onto truck
+    SaleOut,       // Stock sold from truck to shop
+    TruckReturnIn, // Stock returned from truck to batch
+    Adjustment,    // Manual adjustment (damaged, expired, correction)
+    ExpiredOut,    // Stock removed due to expiry
 }
 
 // ==================== Reconciliation DTOs ====================
@@ -48,17 +48,17 @@ pub struct ReconciliationResponse {
     pub id: i64,
     pub reconciliation_date: NaiveDate,
     pub status: String,
-    
+
     // Truck summary
     pub trucks_out: i32,
     pub trucks_verified: i32,
-    
+
     // Stock summary
     pub total_items_loaded: f64,
     pub total_items_sold: f64,
     pub total_items_returned: f64,
     pub total_items_discarded: f64,
-    
+
     // Financial summary
     pub total_sales_amount: f64,
     pub total_commission_earned: f64,
@@ -66,7 +66,7 @@ pub struct ReconciliationResponse {
     pub total_payments_collected: f64,
     pub pending_payments: f64,
     pub net_profit: f64,
-    
+
     // Metadata
     pub started_by: Option<i64>,
     pub started_by_username: Option<String>,
@@ -75,7 +75,7 @@ pub struct ReconciliationResponse {
     pub finalized_by_username: Option<String>,
     pub finalized_at: Option<chrono::NaiveDateTime>,
     pub notes: Option<String>,
-    
+
     // Truck items
     pub truck_items: Vec<TruckVerificationItem>,
 }
@@ -88,25 +88,25 @@ pub struct TruckVerificationItem {
     pub driver_id: i64,
     pub driver_username: String,
     pub truck_load_id: i64,
-    
+
     // Stock verification
     pub items_loaded: f64,
     pub items_sold: f64,
     pub items_returned: f64,
     pub items_discarded: f64,
-    
+
     // Status
     pub is_verified: bool,
     pub has_discrepancy: bool,
     pub discrepancy_notes: Option<String>,
-    
+
     // Financial
     pub sales_amount: f64,
     pub commission_earned: f64,
     pub allowance_received: f64,
     pub payments_collected: f64,
     pub pending_payments: f64,
-    
+
     pub verified_by: Option<i64>,
     pub verified_at: Option<chrono::NaiveDateTime>,
 }

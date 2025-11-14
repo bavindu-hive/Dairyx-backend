@@ -1,10 +1,12 @@
-use axum::{extract::State, Json};
-use axum::http::StatusCode;
-use crate::state::AppState;
+use crate::dtos::truck::{
+    CreateTruckRequest, TruckResponse, TruckSummary, UpdateTruckMaxLimitRequest, UpdateTruckRequest,
+};
 use crate::error::AppError;
-use crate::dtos::truck::{CreateTruckRequest, UpdateTruckRequest, UpdateTruckMaxLimitRequest, TruckResponse, TruckSummary};
 use crate::middleware::auth::AuthContext;
+use crate::state::AppState;
 use axum::extract::Extension;
+use axum::http::StatusCode;
+use axum::{extract::State, Json};
 
 pub async fn create_truck(
     State(AppState { db_pool }): State<AppState>,
@@ -21,16 +23,15 @@ pub async fn create_truck(
 
     // If driver_id provided, validate it's a driver (not manager)
     if let Some(driver_id) = req.driver_id {
-        let driver = sqlx::query!(
-            r#"SELECT role FROM users WHERE id = $1"#,
-            driver_id
-        )
-        .fetch_optional(&db_pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("Driver not found"))?;
+        let driver = sqlx::query!(r#"SELECT role FROM users WHERE id = $1"#, driver_id)
+            .fetch_optional(&db_pool)
+            .await?
+            .ok_or_else(|| AppError::not_found("Driver not found"))?;
 
         if driver.role != "driver" {
-            return Err(AppError::validation("Only users with role 'driver' can be assigned to trucks"));
+            return Err(AppError::validation(
+                "Only users with role 'driver' can be assigned to trucks",
+            ));
         }
     }
 
@@ -62,12 +63,9 @@ pub async fn create_truck(
 
     // Fetch driver username if assigned
     let driver_username = if let Some(driver_id) = truck.driver_id {
-        sqlx::query_scalar!(
-            r#"SELECT username FROM users WHERE id = $1"#,
-            driver_id
-        )
-        .fetch_optional(&db_pool)
-        .await?
+        sqlx::query_scalar!(r#"SELECT username FROM users WHERE id = $1"#, driver_id)
+            .fetch_optional(&db_pool)
+            .await?
     } else {
         None
     };
@@ -91,7 +89,9 @@ pub async fn get_truck(
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<TruckResponse>, AppError> {
     let truck = sqlx::query!(
-        r#"SELECT t.id, t.truck_number, t.driver_id, t.is_active, (t.max_allowance_limit)::FLOAT8 as "max_allowance_limit!", t.created_at, u.username as "driver_username?"
+        r#"SELECT t.id, t.truck_number, t.driver_id, t.is_active, 
+        (t.max_allowance_limit)::FLOAT8 as "max_allowance_limit!", 
+        t.created_at, u.username as "driver_username?"
         FROM trucks t
         LEFT JOIN users u ON t.driver_id = u.id
         WHERE t.id = $1"#,
@@ -159,16 +159,15 @@ pub async fn update_truck(
 
     // If driver_id provided, validate it's a driver (not manager)
     if let Some(Some(new_driver_id)) = req.driver_id {
-        let driver = sqlx::query!(
-            r#"SELECT role FROM users WHERE id = $1"#,
-            new_driver_id
-        )
-        .fetch_optional(&db_pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("Driver not found"))?;
+        let driver = sqlx::query!(r#"SELECT role FROM users WHERE id = $1"#, new_driver_id)
+            .fetch_optional(&db_pool)
+            .await?
+            .ok_or_else(|| AppError::not_found("Driver not found"))?;
 
         if driver.role != "driver" {
-            return Err(AppError::validation("Only users with role 'driver' can be assigned to trucks"));
+            return Err(AppError::validation(
+                "Only users with role 'driver' can be assigned to trucks",
+            ));
         }
         driver_id = Some(new_driver_id);
     } else if let Some(None) = req.driver_id {
@@ -186,7 +185,8 @@ pub async fn update_truck(
             driver_id = $3,
             is_active = COALESCE($4, is_active)
         WHERE id = $1
-        RETURNING id, truck_number, driver_id, is_active, (max_allowance_limit)::FLOAT8 as "max_allowance_limit!", created_at"#,
+        RETURNING id, truck_number, driver_id, is_active, 
+        (max_allowance_limit)::FLOAT8 as "max_allowance_limit!", created_at"#,
         id,
         truck_number.as_deref().map(|s| s.trim()),
         driver_id,
@@ -214,11 +214,10 @@ pub async fn update_truck(
     // Fetch driver username if assigned
     let driver_username = if let Some(driver_id) = truck.driver_id {
         sqlx::query_scalar!(
-            r#"SELECT username FROM users WHERE id = $1"#,
-            driver_id
-        )
-        .fetch_optional(&db_pool)
-        .await?
+            r#"SELECT username FROM users WHERE id = $1"#
+            , driver_id)
+            .fetch_optional(&db_pool)
+            .await?
     } else {
         None
     };
@@ -252,7 +251,9 @@ pub async fn delete_truck(
     .await?;
 
     if has_sales {
-        return Err(AppError::conflict("Cannot delete truck with existing sales records"));
+        return Err(AppError::conflict(
+            "Cannot delete truck with existing sales records",
+        ));
     }
 
     // Check if truck has allowances
@@ -264,7 +265,9 @@ pub async fn delete_truck(
     .await?;
 
     if has_allowances {
-        return Err(AppError::conflict("Cannot delete truck with existing allowance records"));
+        return Err(AppError::conflict(
+            "Cannot delete truck with existing allowance records",
+        ));
     }
 
     let result = sqlx::query!("DELETE FROM trucks WHERE id = $1", id)
@@ -285,11 +288,15 @@ pub async fn update_truck_max_limit(
     Json(req): Json<UpdateTruckMaxLimitRequest>,
 ) -> Result<Json<TruckResponse>, AppError> {
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can update truck max limit"));
+        return Err(AppError::forbidden(
+            "Only managers can update truck max limit",
+        ));
     }
 
     if req.max_allowance_limit < 0.0 {
-        return Err(AppError::validation("Max allowance limit cannot be negative"));
+        return Err(AppError::validation(
+            "Max allowance limit cannot be negative",
+        ));
     }
 
     let truck = sqlx::query!(
@@ -306,12 +313,9 @@ pub async fn update_truck_max_limit(
 
     // Fetch driver username if assigned
     let driver_username = if let Some(driver_id) = truck.driver_id {
-        sqlx::query_scalar!(
-            r#"SELECT username FROM users WHERE id = $1"#,
-            driver_id
-        )
-        .fetch_optional(&db_pool)
-        .await?
+        sqlx::query_scalar!(r#"SELECT username FROM users WHERE id = $1"#, driver_id)
+            .fetch_optional(&db_pool)
+            .await?
     } else {
         None
     };

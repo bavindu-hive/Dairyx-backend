@@ -1,16 +1,15 @@
-use bcrypt::{hash, verify, DEFAULT_COST};
-use crate::dtos::user::{RegisterUserRequest, UserResponse, LoginRequest, LoginResponse};
 use crate::auth::jwt::sign_token;
+use crate::dtos::user::{LoginRequest, LoginResponse, RegisterUserRequest, UserResponse};
 use crate::error::AppError;
-use axum::{extract::State, Json};
-use crate::state::AppState;
 use crate::middleware::auth::AuthContext;
+use crate::state::AppState;
 use axum::extract::Extension;
-
+use axum::{extract::State, Json};
+use bcrypt::{hash, verify, DEFAULT_COST};
 
 pub async fn register_user(
     State(AppState { db_pool }): State<AppState>,
-    Json(payload): Json<RegisterUserRequest>
+    Json(payload): Json<RegisterUserRequest>,
 ) -> Result<(axum::http::StatusCode, Json<UserResponse>), AppError> {
     // Basic validation
     if payload.role != "manager" && payload.role != "driver" {
@@ -31,7 +30,7 @@ pub async fn register_user(
         r#"
         INSERT INTO users (username, password_hash, role)
         VALUES ($1, $2, $3)
-    RETURNING id, username, role, is_active, created_at as "created_at!"
+        RETURNING id, username, role, is_active, created_at as "created_at!"
         "#,
         payload.username,
         password_hash,
@@ -62,7 +61,7 @@ pub async fn register_user(
 
 pub async fn login_user(
     State(AppState { db_pool }): State<AppState>,
-    Json(payload): Json<LoginRequest>
+    Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
     if payload.username.trim().is_empty() {
         return Err(AppError::validation("Username required"));
@@ -73,7 +72,9 @@ pub async fn login_user(
 
     let user = sqlx::query_as!(
         UserRow,
-        r#"SELECT id, username, password_hash, role, is_active FROM users WHERE username = $1"#,
+        r#"SELECT id, username, password_hash, role, is_active 
+        FROM users 
+        WHERE username = $1"#,
         payload.username
     )
     .fetch_optional(&db_pool)
@@ -85,14 +86,18 @@ pub async fn login_user(
     }
 
     let ok = verify(&payload.password, &user.password_hash)
-        .map_err(|e| AppError::internal(format!("Password verify error: {e}")))?;
+        .map_err(|e| AppError::internal(
+            format!("Password verify error: {e}"
+        )))?;
 
     if !ok {
         return Err(AppError::validation("Invalid credentials"));
     }
 
-    let secret = std::env::var("JWT_SECRET")
-        .map_err(|_| AppError::internal("JWT secret not configured"))?;
+    let secret =
+        std::env::var("JWT_SECRET").map_err(
+            |_| AppError::internal("JWT secret not configured"
+        ))?;
 
     let token = sign_token(user.id, &user.role, &user.username, &secret)?;
 
@@ -107,7 +112,7 @@ pub async fn login_user(
 // Authenticated endpoint: returns full user profile from DB using the id in AuthContext
 pub async fn get_me(
     State(AppState { db_pool }): State<AppState>,
-    Extension(auth): Extension<AuthContext>
+    Extension(auth): Extension<AuthContext>,
 ) -> Result<Json<UserResponse>, AppError> {
     let rec = sqlx::query_as!(
         UserProfileRow,

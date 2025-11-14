@@ -1,9 +1,9 @@
-use axum::{extract::State, Json, Extension};
-use axum::http::StatusCode;
-use crate::state::AppState;
+use crate::dtos::shop::{CreateShopRequest, ShopResponse, ShopSummary, UpdateShopRequest};
 use crate::error::AppError;
-use crate::dtos::shop::{CreateShopRequest, UpdateShopRequest, ShopResponse, ShopSummary};
 use crate::middleware::auth::AuthContext;
+use crate::state::AppState;
+use axum::http::StatusCode;
+use axum::{extract::State, Extension, Json};
 
 pub async fn create_shop(
     State(AppState { db_pool }): State<AppState>,
@@ -182,7 +182,9 @@ pub async fn delete_shop(
     .await?;
 
     if has_sales {
-        return Err(AppError::conflict("Cannot delete shop with existing sales records"));
+        return Err(AppError::conflict(
+            "Cannot delete shop with existing sales records",
+        ));
     }
 
     let result = sqlx::query!("DELETE FROM shops WHERE id = $1", id)

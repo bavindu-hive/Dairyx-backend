@@ -1,12 +1,12 @@
-use axum::{extract::{State, Path}, Json, Extension};
+use crate::{
+    dtos::reconciliation::*, error::AppError, middleware::auth::AuthContext, state::AppState,
+};
+use axum::{
+    extract::{Path, State},
+    Extension, Json,
+};
 use chrono::NaiveDate;
 use sqlx::{PgPool, Row};
-use crate::{
-    state::AppState,
-    error::AppError,
-    middleware::auth::AuthContext,
-    dtos::reconciliation::*,
-};
 
 // ==================== Start Reconciliation ====================
 
@@ -17,7 +17,9 @@ pub async fn start_reconciliation(
 ) -> Result<Json<ReconciliationResponse>, AppError> {
     // Only managers can start reconciliation
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can start reconciliation"));
+        return Err(AppError::forbidden(
+            "Only managers can start reconciliation",
+        ));
     }
 
     let mut tx = db_pool.begin().await?;
@@ -26,17 +28,24 @@ pub async fn start_reconciliation(
     let exists = sqlx::query_scalar!(
         "SELECT EXISTS(SELECT 1 FROM daily_reconciliations WHERE reconciliation_date = $1)",
         req.reconciliation_date
-    ).fetch_one(&mut *tx).await?.unwrap_or(false);
+    )
+    .fetch_one(&mut *tx)
+    .await?
+    .unwrap_or(false);
 
     if exists {
-        return Err(AppError::conflict("Reconciliation already exists for this date"));
+        return Err(AppError::conflict(
+            "Reconciliation already exists for this date",
+        ));
     }
 
     // Count trucks that went out on this date
     let trucks_out = sqlx::query_scalar!(
         r#"SELECT COUNT(DISTINCT truck_id)::INT as "count!" FROM truck_loads WHERE load_date = $1"#,
         req.reconciliation_date
-    ).fetch_one(&mut *tx).await?;
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     // Create reconciliation record
     let rec = sqlx::query!(
@@ -48,7 +57,9 @@ pub async fn start_reconciliation(
         trucks_out,
         auth.user_id as i32,
         req.notes
-    ).fetch_one(&mut *tx).await?;
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     // Get all truck loads for this date and create reconciliation_items
     // We need to get the driver from sales since truck_loads doesn't store driver_id
@@ -98,8 +109,10 @@ pub async fn start_reconciliation(
                WHERE tallow.allowance_date = $1 AND ta.truck_id = $2"#,
             req.reconciliation_date,
             tl.truck_id
-        ).fetch_optional(&mut *tx).await?.unwrap_or(0.0);
-
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(0.0);
 
         let items_loaded = tl.items_loaded as f64;
         let items_sold = sales_data.items_sold;
@@ -127,7 +140,9 @@ pub async fn start_reconciliation(
             allowance,
             sales_data.payments,
             pending_payments
-        ).fetch_one(&mut *tx).await?;
+        )
+        .fetch_one(&mut *tx)
+        .await?;
 
         truck_items.push(TruckVerificationItem {
             id: item.id as i64,
@@ -192,7 +207,9 @@ pub async fn verify_truck_return(
 ) -> Result<Json<TruckVerificationItem>, AppError> {
     // Only managers can verify returns
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can verify truck returns"));
+        return Err(AppError::forbidden(
+            "Only managers can verify truck returns",
+        ));
     }
 
     let mut tx = db_pool.begin().await?;
@@ -221,7 +238,7 @@ pub async fn verify_truck_return(
     // Calculate totals
     let total_returned: f64 = req.items_returned.iter().map(|i| i.quantity as f64).sum();
     let total_discarded: f64 = req.items_discarded.iter().map(|i| i.quantity as f64).sum();
-    
+
     let items_loaded = item.items_loaded;
     let items_sold = item.items_sold;
     let expected_return = items_loaded - items_sold;
@@ -247,7 +264,9 @@ pub async fn verify_truck_return(
         req.discrepancy_notes,
         auth.user_id as i32,
         item.id
-    ).execute(&mut *tx).await?;
+    )
+    .execute(&mut *tx)
+    .await?;
 
     // Update reconciliation trucks_verified count
     sqlx::query!(
@@ -258,7 +277,9 @@ pub async fn verify_truck_return(
            )
            WHERE id = $1"#,
         rec.id
-    ).execute(&mut *tx).await?;
+    )
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 
@@ -275,7 +296,9 @@ pub async fn finalize_reconciliation(
 ) -> Result<Json<ReconciliationResponse>, AppError> {
     // Only managers can finalize
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can finalize reconciliation"));
+        return Err(AppError::forbidden(
+            "Only managers can finalize reconciliation",
+        ));
     }
 
     let mut tx = db_pool.begin().await?;
@@ -314,7 +337,9 @@ pub async fn finalize_reconciliation(
            FROM reconciliation_items ri
            WHERE ri.reconciliation_id = $1"#,
         rec.id
-    ).fetch_all(&mut *tx).await?;
+    )
+    .fetch_all(&mut *tx)
+    .await?;
 
     // Return stock to batches and create stock movements
     for item in &items {
@@ -331,11 +356,13 @@ pub async fn finalize_reconciliation(
                    JOIN batches b ON tli.batch_id = b.id
                    WHERE tli.truck_load_id = $1 AND (tli.quantity_loaded - tli.quantity_sold) > 0"#,
                 item.truck_load_id as i32
-            ).fetch_all(&mut *tx).await?;
+            )
+            .fetch_all(&mut *tx)
+            .await?;
 
             for ti in truck_items {
                 let return_qty = ti.remaining.unwrap_or(0);
-                
+
                 // Update batch remaining_quantity
                 sqlx::query!(
                     r#"UPDATE batches 
@@ -343,7 +370,9 @@ pub async fn finalize_reconciliation(
                        WHERE id = $2"#,
                     return_qty,
                     ti.batch_id
-                ).execute(&mut *tx).await?;
+                )
+                .execute(&mut *tx)
+                .await?;
 
                 // Log stock movement
                 sqlx::query!(
@@ -358,7 +387,9 @@ pub async fn finalize_reconciliation(
                     rec.id as i32,
                     auth.user_id as i32,
                     date
-                ).execute(&mut *tx).await?;
+                )
+                .execute(&mut *tx)
+                .await?;
             }
         }
     }
@@ -378,7 +409,9 @@ pub async fn finalize_reconciliation(
            FROM reconciliation_items
            WHERE reconciliation_id = $1"#,
         rec.id
-    ).fetch_one(&mut *tx).await?;
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     let net_profit = totals.total_commission - totals.total_allowance;
 
@@ -411,7 +444,9 @@ pub async fn finalize_reconciliation(
         net_profit,
         auth.user_id as i32,
         rec.id
-    ).execute(&mut *tx).await?;
+    )
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 
@@ -439,12 +474,18 @@ pub async fn list_reconciliations(
 ) -> Result<Json<Vec<ReconciliationSummary>>, AppError> {
     // Only managers can list all reconciliations
     if auth.role != "manager" {
-        return Err(AppError::forbidden("Only managers can list reconciliations"));
+        return Err(AppError::forbidden(
+            "Only managers can list reconciliations",
+        ));
     }
 
     let status = params.get("status");
-    let start_date = params.get("start_date").and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
-    let end_date = params.get("end_date").and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+    let start_date = params
+        .get("start_date")
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+    let end_date = params
+        .get("end_date")
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
     let mut query = String::from(
         r#"SELECT 
@@ -453,7 +494,7 @@ pub async fn list_reconciliations(
             CASE WHEN net_profit >= 0 THEN 'profit' ELSE 'loss' END as profit_status,
             started_at, finalized_at
            FROM daily_reconciliations
-           WHERE 1=1"#
+           WHERE 1=1"#,
     );
 
     if let Some(s) = status {
@@ -470,8 +511,9 @@ pub async fn list_reconciliations(
 
     let rows = sqlx::query(&query).fetch_all(&db_pool).await?;
 
-    let summaries: Vec<ReconciliationSummary> = rows.iter().map(|row| {
-        ReconciliationSummary {
+    let summaries: Vec<ReconciliationSummary> = rows
+        .iter()
+        .map(|row| ReconciliationSummary {
             id: row.get("id"),
             reconciliation_date: row.get("reconciliation_date"),
             status: row.get("status"),
@@ -481,15 +523,18 @@ pub async fn list_reconciliations(
             profit_status: row.get("profit_status"),
             started_at: row.get("started_at"),
             finalized_at: row.get("finalized_at"),
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(summaries))
 }
 
 // ==================== Helper Functions ====================
 
-async fn fetch_reconciliation(db_pool: &PgPool, date: NaiveDate) -> Result<ReconciliationResponse, AppError> {
+async fn fetch_reconciliation(
+    db_pool: &PgPool,
+    date: NaiveDate,
+) -> Result<ReconciliationResponse, AppError> {
     let rec = sqlx::query!(
         r#"SELECT 
             dr.id, dr.reconciliation_date, (dr.status)::TEXT as "status!",
@@ -512,8 +557,10 @@ async fn fetch_reconciliation(db_pool: &PgPool, date: NaiveDate) -> Result<Recon
            LEFT JOIN users fu ON dr.finalized_by = fu.id
            WHERE dr.reconciliation_date = $1"#,
         date
-    ).fetch_optional(db_pool).await?
-        .ok_or_else(|| AppError::not_found("Reconciliation not found"))?;
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("Reconciliation not found"))?;
 
     // Get truck items
     let items = sqlx::query!(
@@ -537,30 +584,35 @@ async fn fetch_reconciliation(db_pool: &PgPool, date: NaiveDate) -> Result<Recon
            WHERE ri.reconciliation_id = $1
            ORDER BY t.truck_number"#,
         rec.id
-    ).fetch_all(db_pool).await?;
+    )
+    .fetch_all(db_pool)
+    .await?;
 
-    let truck_items = items.into_iter().map(|item| TruckVerificationItem {
-        id: item.id as i64,
-        truck_id: item.truck_id as i64,
-        truck_number: item.truck_number,
-        driver_id: item.driver_id as i64,
-        driver_username: item.driver_username,
-        truck_load_id: item.truck_load_id as i64,
-        items_loaded: item.items_loaded,
-        items_sold: item.items_sold,
-        items_returned: item.items_returned,
-        items_discarded: item.items_discarded,
-        is_verified: item.is_verified,
-        has_discrepancy: item.has_discrepancy,
-        discrepancy_notes: item.discrepancy_notes,
-        sales_amount: item.sales_amount,
-        commission_earned: item.commission_earned,
-        allowance_received: item.allowance_received,
-        payments_collected: item.payments_collected,
-        pending_payments: item.pending_payments,
-        verified_by: item.verified_by.map(|id| id as i64),
-        verified_at: item.verified_at,
-    }).collect();
+    let truck_items = items
+        .into_iter()
+        .map(|item| TruckVerificationItem {
+            id: item.id as i64,
+            truck_id: item.truck_id as i64,
+            truck_number: item.truck_number,
+            driver_id: item.driver_id as i64,
+            driver_username: item.driver_username,
+            truck_load_id: item.truck_load_id as i64,
+            items_loaded: item.items_loaded,
+            items_sold: item.items_sold,
+            items_returned: item.items_returned,
+            items_discarded: item.items_discarded,
+            is_verified: item.is_verified,
+            has_discrepancy: item.has_discrepancy,
+            discrepancy_notes: item.discrepancy_notes,
+            sales_amount: item.sales_amount,
+            commission_earned: item.commission_earned,
+            allowance_received: item.allowance_received,
+            payments_collected: item.payments_collected,
+            pending_payments: item.pending_payments,
+            verified_by: item.verified_by.map(|id| id as i64),
+            verified_at: item.verified_at,
+        })
+        .collect();
 
     Ok(ReconciliationResponse {
         id: rec.id as i64,
@@ -615,8 +667,10 @@ async fn fetch_truck_verification_item(
            WHERE ri.reconciliation_id = $1 AND ri.truck_id = $2"#,
         reconciliation_id as i32,
         truck_id as i32
-    ).fetch_optional(db_pool).await?
-        .ok_or_else(|| AppError::not_found("Truck not found in reconciliation"))?;
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("Truck not found in reconciliation"))?;
 
     Ok(Json(TruckVerificationItem {
         id: item.id as i64,

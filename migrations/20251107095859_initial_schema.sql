@@ -211,5 +211,4 @@ INSERT INTO users (username, password_hash, role) VALUES
 ON CONFLICT (username) DO UPDATE SET
     password_hash = EXCLUDED.password_hash,
     role = EXCLUDED.role;
-
 COMMIT;

@@ -1,12 +1,12 @@
-use axum::{extract::State, Json, Extension};
-use axum::http::StatusCode;
-use crate::state::AppState;
-use crate::error::AppError;
 use crate::dtos::sale::{
-    CreateSaleRequest, UpdatePaymentRequest, SaleResponse, 
-    SaleItemResponse, SaleSummary, SaleListItem
+    CreateSaleRequest, SaleItemResponse, SaleListItem, SaleResponse, SaleSummary,
+    UpdatePaymentRequest,
 };
+use crate::error::AppError;
 use crate::middleware::auth::AuthContext;
+use crate::state::AppState;
+use axum::http::StatusCode;
+use axum::{extract::State, Extension, Json};
 use sqlx::PgPool;
 
 pub async fn create_sale(
@@ -36,17 +36,16 @@ pub async fn create_sale(
 
     // Verify driver can only create sales for their own truck
     if auth.role == "driver" && truck_load.driver_id != Some(auth.user_id) {
-        return Err(AppError::forbidden("You can only create sales for your own truck"));
+        return Err(AppError::forbidden(
+            "You can only create sales for your own truck",
+        ));
     }
 
     // Verify shop exists
-    let shop = sqlx::query!(
-        r#"SELECT id, name FROM shops WHERE id = $1"#,
-        req.shop_id
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::not_found("Shop not found"))?;
+    let shop = sqlx::query!(r#"SELECT id, name FROM shops WHERE id = $1"#, req.shop_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::not_found("Shop not found"))?;
 
     // Calculate total amount and prepare items
     let mut total_amount: f64 = 0.0;
@@ -128,7 +127,9 @@ pub async fn create_sale(
     }
 
     if amount_paid > total_amount {
-        return Err(AppError::validation("Amount paid cannot exceed total amount"));
+        return Err(AppError::validation(
+            "Amount paid cannot exceed total amount",
+        ));
     }
 
     // Determine payment status
@@ -160,7 +161,17 @@ pub async fn create_sale(
     let mut item_responses = Vec::new();
     let mut total_commission = 0.0;
 
-    for (product_id, product_name, batch_id, batch_number, quantity, unit_price, commission, line_total) in sale_items {
+    for (
+        product_id,
+        product_name,
+        batch_id,
+        batch_number,
+        quantity,
+        unit_price,
+        commission,
+        line_total,
+    ) in sale_items
+    {
         let sale_item = sqlx::query!(
             r#"INSERT INTO sale_items (sale_id, batch_id, quantity, unit_price, commission_earned)
             VALUES ($1, $2, $3, $4::FLOAT8, $5::FLOAT8)
@@ -231,7 +242,9 @@ pub async fn list_sales(
 ) -> Result<Json<Vec<SaleListItem>>, AppError> {
     let driver_id = params.get("driver_id").and_then(|s| s.parse::<i64>().ok());
     let shop_id = params.get("shop_id").and_then(|s| s.parse::<i64>().ok());
-    let sale_date = params.get("sale_date").and_then(|s| s.parse::<chrono::NaiveDate>().ok());
+    let sale_date = params
+        .get("sale_date")
+        .and_then(|s| s.parse::<chrono::NaiveDate>().ok());
     let payment_status = params.get("payment_status");
 
     let mut query_str = String::from(
@@ -248,7 +261,7 @@ pub async fn list_sales(
         JOIN trucks t ON s.truck_id = t.id
         JOIN users u ON s.user_id = u.id
         LEFT JOIN sale_items si ON s.id = si.sale_id
-        WHERE 1=1"#
+        WHERE 1=1"#,
     );
 
     if driver_id.is_some() {
@@ -259,22 +272,46 @@ pub async fn list_sales(
         query_str.push_str(&format!(" AND s.shop_id = ${}", param_num));
     }
     if sale_date.is_some() {
-        let param_num = if driver_id.is_some() && shop_id.is_some() { 3 }
-                       else if driver_id.is_some() || shop_id.is_some() { 2 }
-                       else { 1 };
+        let param_num = if driver_id.is_some() && shop_id.is_some() {
+            3
+        } else if driver_id.is_some() || shop_id.is_some() {
+            2
+        } else {
+            1
+        };
         query_str.push_str(&format!(" AND s.sale_date = ${}", param_num));
     }
     if payment_status.is_some() {
-        let param_num = if driver_id.is_some() && shop_id.is_some() && sale_date.is_some() { 4 }
-                       else if (driver_id.is_some() as u8 + shop_id.is_some() as u8 + sale_date.is_some() as u8) == 2 { 3 }
-                       else if driver_id.is_some() || shop_id.is_some() || sale_date.is_some() { 2 }
-                       else { 1 };
+        let param_num = if driver_id.is_some() && shop_id.is_some() && sale_date.is_some() {
+            4
+        } else if (driver_id.is_some() as u8 + shop_id.is_some() as u8 + sale_date.is_some() as u8)
+            == 2
+        {
+            3
+        } else if driver_id.is_some() || shop_id.is_some() || sale_date.is_some() {
+            2
+        } else {
+            1
+        };
         query_str.push_str(&format!(" AND s.payment_status = ${}", param_num));
     }
 
     query_str.push_str(" GROUP BY s.id, s.sale_date, s.payment_status, s.total_amount, s.amount_paid, sh.name, t.truck_number, u.username ORDER BY s.sale_date DESC, s.id DESC");
 
-    let mut query = sqlx::query_as::<_, (i64, chrono::NaiveDate, String, f64, f64, String, String, String, i32)>(&query_str);
+    let mut query = sqlx::query_as::<
+        _,
+        (
+            i64,
+            chrono::NaiveDate,
+            String,
+            f64,
+            f64,
+            String,
+            String,
+            String,
+            i32,
+        ),
+    >(&query_str);
 
     if let Some(did) = driver_id {
         query = query.bind(did);
@@ -294,19 +331,31 @@ pub async fn list_sales(
     Ok(Json(
         sales
             .into_iter()
-            .map(|(id, sale_date, payment_status, total_amount, amount_paid, shop_name, truck_number, driver_username, total_items)| {
-                SaleListItem {
+            .map(
+                |(
                     id,
+                    sale_date,
+                    payment_status,
+                    total_amount,
+                    amount_paid,
                     shop_name,
                     truck_number,
                     driver_username,
-                    total_amount,
-                    amount_paid,
-                    payment_status,
-                    sale_date,
                     total_items,
-                }
-            })
+                )| {
+                    SaleListItem {
+                        id,
+                        shop_name,
+                        truck_number,
+                        driver_username,
+                        total_amount,
+                        amount_paid,
+                        payment_status,
+                        sale_date,
+                        total_items,
+                    }
+                },
+            )
             .collect(),
     ))
 }
@@ -318,7 +367,9 @@ pub async fn update_payment(
     Json(req): Json<UpdatePaymentRequest>,
 ) -> Result<Json<SaleResponse>, AppError> {
     if req.additional_payment <= 0.0 {
-        return Err(AppError::validation("Additional payment must be greater than 0"));
+        return Err(AppError::validation(
+            "Additional payment must be greater than 0",
+        ));
     }
 
     // Start transaction
@@ -338,7 +389,9 @@ pub async fn update_payment(
 
     // If driver, verify they own this sale
     if auth.role == "driver" && sale.user_id != auth.user_id {
-        return Err(AppError::forbidden("You can only update payments for your own sales"));
+        return Err(AppError::forbidden(
+            "You can only update payments for your own sales",
+        ));
     }
 
     let new_amount_paid = sale.amount_paid + req.additional_payment;
